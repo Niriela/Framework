@@ -1,7 +1,7 @@
 @echo off
 set SRC=FrontServlet.java
 set JAR=FrontServlet.jar
-set LOCAL_LIB=..\test\WEB-INF\lib
+set LOCAL_LIB=..\test\webapp\WEB-INF\lib
 set TOMCAT_WEBAPPS=C:\tomcat\apache-tomcat-10.1.28\webapps
 set APP_NAME=Sprint1
 
@@ -23,7 +23,11 @@ if not exist "%TOMCAT_WEBAPPS%\%APP_NAME%\WEB-INF" mkdir "%TOMCAT_WEBAPPS%\%APP_
 if not exist "%TOMCAT_WEBAPPS%\%APP_NAME%\WEB-INF\lib" mkdir "%TOMCAT_WEBAPPS%\%APP_NAME%\WEB-INF\lib"
 
 rem Copie le web.xml
-copy "..\test\WEB-INF\web.xml" "%TOMCAT_WEBAPPS%\%APP_NAME%\WEB-INF\"
+rem Crée le dossier pages si besoin
+if not exist "%TOMCAT_WEBAPPS%\%APP_NAME%\pages" mkdir "%TOMCAT_WEBAPPS%\%APP_NAME%\pages"
+
+rem Copie le web.xml
+copy "..\test\webapp\WEB-INF\web.xml" "%TOMCAT_WEBAPPS%\%APP_NAME%\WEB-INF\" /Y
 
 rem Copie le JAR de l'application
 copy "%LOCAL_LIB%\%JAR%" "%TOMCAT_WEBAPPS%\%APP_NAME%\WEB-INF\lib\"
@@ -34,8 +38,9 @@ copy "%LOCAL_LIB%\servlet-api.jar" "%TOMCAT_WEBAPPS%\%APP_NAME%\WEB-INF\lib\"
 rem CORRECT (cherche dans le dossier courant)
 @REM copy "../test/*.jsp" "%TOMCAT_WEBAPPS%\%APP_NAME%\" /Y
 @REM copy "D:\ITU_S5\Naina\FRAMEWORK\Sprint_framework\test\*.jsp" "%TOMCAT_WEBAPPS%\%APP_NAME%\" /Y
-copy "..\test\*.jsp" "%TOMCAT_WEBAPPS%\%APP_NAME%\" /Y
-copy "..\test\*.html" "%TOMCAT_WEBAPPS%\%APP_NAME%\" /Y
+copy "..\test\webapp\pages\*.jsp" "%TOMCAT_WEBAPPS%\%APP_NAME%\pages\" /Y
+copy "..\test\webapp\pages\*.html" "%TOMCAT_WEBAPPS%\%APP_NAME%\pages\" /Y
+copy "..\test\webapp\pages\*.html" "%TOMCAT_WEBAPPS%\%APP_NAME%\pages\" /Y
 
 rem Nettoyage
 del FrontServlet.class
