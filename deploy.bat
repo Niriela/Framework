@@ -35,6 +35,7 @@ rem CORRECT (cherche dans le dossier courant)
 @REM copy "../test/*.jsp" "%TOMCAT_WEBAPPS%\%APP_NAME%\" /Y
 @REM copy "D:\ITU_S5\Naina\FRAMEWORK\Sprint_framework\test\*.jsp" "%TOMCAT_WEBAPPS%\%APP_NAME%\" /Y
 copy "..\test\*.jsp" "%TOMCAT_WEBAPPS%\%APP_NAME%\" /Y
+copy "..\test\*.html" "%TOMCAT_WEBAPPS%\%APP_NAME%\" /Y
 
 rem Nettoyage
 del FrontServlet.class
