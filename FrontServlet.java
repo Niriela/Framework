@@ -1,38 +1,92 @@
 package framework;
 
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.net.MalformedURLException;
-import java.util.Arrays;
-import java.util.List;
-
 import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.Map;
+import framework.util.ControllerScanner;
+
 public class FrontServlet extends HttpServlet {
-     @Override
-    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
-        response.setContentType("text/html");
-        
-        String path = request.getRequestURI().substring(request.getContextPath().length());
+    private RequestDispatcher defaultDispatcher;
+    private ControllerScanner.ScanResult scanResult = new ControllerScanner.ScanResult();
 
-        boolean ressources = getServletContext().getResource(path) != null;
-
-        // Si c'est la racine, on affiche toujours le HTML personnalisé
-        if ("/".equals(path)) {
-            response.getWriter().println("<html><body>");
-            response.getWriter().println("<h1>Path: /</h1>");
-            response.getWriter().println("</body></html>");
-        } else if (ressources) {
-            getServletContext().getNamedDispatcher("default").forward(request, response);
-            return;
-        } else {
-            response.getWriter().println("<html><body>");
-            response.getWriter().println("<h1>Path: " + path + "</h1>");
-            response.getWriter().println("</body></html>");
+    @Override
+    public void init() {
+        defaultDispatcher = getServletContext().getNamedDispatcher("default");
+        try {
+            scanResult = ControllerScanner.scan(getServletContext());
+            // debug : lister mappings
+            for (Map.Entry<String, Method> e : scanResult.urlToMethod.entrySet()) {
+                System.out.println("Mapped URL: " + e.getKey() + " -> " +
+                        e.getValue().getDeclaringClass().getName() + "#" + e.getValue().getName());
+            }
+        } catch (Exception ex) {
+            // conserver scanResult vide en cas d'erreur pour ne pas bloquer le servlet
+            scanResult = new ControllerScanner.ScanResult();
+            System.err.println("ControllerScanner init error: " + ex.getMessage());
         }
-    }    
-}
+    }
+
+    @Override
+    protected void service(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
+        String path = req.getRequestURI().substring(req.getContextPath().length());
+
+        boolean resourceExists = getServletContext().getResource(path) != null;
+        if (resourceExists) {
+            if (defaultDispatcher != null) {
+                defaultDispatcher.forward(req, res);
+                return;
+            }
+        }
+
+        Method m = scanResult.urlToMethod.get(path);
+        if (m != null) {
+            if (handleMappedMethod(req, res, m)) return;
+        }
+
+        // fallback : page not found
+        customServe(req, res);
+    }
+
+    private void customServe(HttpServletRequest req, HttpServletResponse res) throws IOException {
+        try (PrintWriter out = res.getWriter()) {
+            String uri = req.getRequestURI();
+            String responseBody = "<html><head><title>Resource Not Found</title></head><body>" +
+                    "<h1>Unknown resource</h1><p>The requested URL was not found: <strong>" + uri + "</strong></p>" +
+                    "</body></html>";
+            res.setContentType("text/html;charset=UTF-8");
+            out.println(responseBody);
+        }
+    }
+
+    // nouvelle méthode extrait le comportement d'affichage + invocation
+    private boolean handleMappedMethod(HttpServletRequest req, HttpServletResponse res, Method m) throws IOException {
+        Class<?> cls = m.getDeclaringClass();
+        boolean isController = scanResult.controllerClasses.contains(cls);
+
+        res.setContentType("text/plain;charset=UTF-8");
+        try (PrintWriter out = res.getWriter()) {
+            if (!isController) {
+                out.printf("NON ANNOTEE PAR LE ControllerAnnotation : %s%n", cls.getName());
+                return true;
+            }
+
+            out.printf("Classe associe : %s%n", cls.getName());
+            out.printf("Nom de la methode: %s%n", m.getName());
+
+        }
+        return true;   
+    }  
+
+}    
+
+
+
+
