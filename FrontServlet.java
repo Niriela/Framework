@@ -41,7 +41,7 @@ public class FrontServlet extends HttpServlet {
 
     @Override
     protected void service(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
-    String path = req.getRequestURI().substring(req.getContextPath().length()).toLowerCase();
+        String path = req.getRequestURI().substring(req.getContextPath().length()).toLowerCase();
 
         // Vérifier si la ressource existe
         boolean ressources = getServletContext().getResource(path) != null;
@@ -56,12 +56,13 @@ public class FrontServlet extends HttpServlet {
             }
             return;
         } else if (ressources) {
-            // Si c'est une ressource statique existante, la servir avec le default dispatcher
+            // Si c'est une ressource statique existante, la servir avec le default
+            // dispatcher
             RequestDispatcher rd = getServletContext().getNamedDispatcher("default");
             if (rd != null) {
                 rd.forward(req, res);
                 return;
-            } 
+            }
         }
 
         // Chercher un contrôleur pour cette URL
@@ -74,14 +75,14 @@ public class FrontServlet extends HttpServlet {
         }
 
         if (m != null) {
-            if (handleMappedMethod(req, res, m)) return;
+            if (handleMappedMethod(req, res, m))
+                return;
         }
 
         // Si rien ne correspond, afficher un message personnalisé
-         customServe(req, res);
-        
-    }
+        customServe(req, res);
 
+    }
 
     private void customServe(HttpServletRequest req, HttpServletResponse res) throws IOException {
         String path = req.getRequestURI().substring(req.getContextPath().length());
@@ -121,16 +122,24 @@ public class FrontServlet extends HttpServlet {
                 return true;
             }
 
-            // si ModelView -> forward directement (on définit text/html dans handleModelView)
-            if (result instanceof framework.views.ModelView) {
-                handleModelView(req, res, (framework.views.ModelView) result);
+            // si ModelView -> forward directement (SANS écrire avant)
+            if (result instanceof ModelView) {
+                handleModelView(req, res, (ModelView) result);
                 return true;
             }
 
-            // sinon on écrit du texte -> là on fixe text/plain
+            // sinon on écrit du texte -> là on fixe text/plain ET on écrit le debug +
+            // résultat
             try (PrintWriter out = res.getWriter()) {
                 res.setContentType("text/plain;charset=UTF-8");
-                handleReturnValue(out, req, res, m, result);
+                // vérifier si la classe est annotée @Controller
+                if (!cls.isAnnotationPresent(framework.annotations.Controller.class)) {
+                    out.printf("classe non annote controller : %s%n", cls.getName());
+                } else {
+                    out.printf("Classe associe : %s%n", cls.getName());
+                    out.printf("Nom de la methode: %s%n", m.getName());
+                    handleReturnValue(out, req, res, m, result);
+                }
             }
 
         } catch (InvocationTargetException ite) {
@@ -150,17 +159,11 @@ public class FrontServlet extends HttpServlet {
     }
 
     // nouvelle fonction pour gérer le retour de la méthode
-    private void handleReturnValue(PrintWriter out, HttpServletRequest req, HttpServletResponse res, Method m, Object result) throws ServletException, IOException {
+    private void handleReturnValue(PrintWriter out, HttpServletRequest req, HttpServletResponse res, Method m,
+            Object result) throws ServletException, IOException {
         // si la méthode a retourné une String (extrait demandé)
         if (result instanceof String) {
             out.printf("Methode string invoquee : %s", (String) result);
-            return;
-        }
-
-        // si la méthode a retourné un ModelView -> déléguer au forward
-        if (result instanceof ModelView) {
-            // ne pas écrire dans la réponse ici, déléguer directement au forward
-            handleModelView(req, res, (ModelView) result);
             return;
         }
 
@@ -177,13 +180,42 @@ public class FrontServlet extends HttpServlet {
         }
     }
 
-     // méthode dédiée pour gérer les ModelView (forward vers la vue)
-    private void handleModelView(HttpServletRequest req, HttpServletResponse res, ModelView mv) throws ServletException, IOException {
+    // private void handleModelView(HttpServletRequest req, HttpServletResponse res,
+    // ModelView mv)
+    // throws ServletException, IOException {
+    // if (mv == null) {
+    // res.setContentType("text/plain;charset=UTF-8");
+    // res.getWriter().println("ModelView est null");
+    // return;
+    // }
+
+    // String view = mv.getView();
+    // if (view == null || view.isEmpty()) {
+    // res.setContentType("text/plain;charset=UTF-8");
+    // res.getWriter().println("ModelView.view est null ou vide");
+    // return;
+    // }
+
+    // RequestDispatcher rd = req.getRequestDispatcher(view);
+    // if (rd == null) {
+    // res.setContentType("text/plain;charset=UTF-8");
+    // res.getWriter().println("Impossible d'obtenir RequestDispatcher pour la vue:
+    // " + view);
+    // return;
+    // }
+
+    // // NE PAS définir le Content-Type - laissez le dispatcher s'en charger
+    // rd.forward(req, res);
+    // }
+
+    private void handleModelView(HttpServletRequest req, HttpServletResponse res, ModelView mv)
+            throws ServletException, IOException {
         if (mv == null) {
             res.setContentType("text/plain;charset=UTF-8");
             res.getWriter().println("ModelView est null");
             return;
         }
+
         String view = mv.getView();
         if (view == null || view.isEmpty()) {
             res.setContentType("text/plain;charset=UTF-8");
@@ -198,12 +230,16 @@ public class FrontServlet extends HttpServlet {
             return;
         }
 
-        // IMPORTANT : indiquer HTML avant le forward pour que le conteneur serve la ressource en HTML
-        res.setContentType("text/html;charset=UTF-8");
+        // ✅ Forcer le bon Content-Type avant le forward
+        if (view.endsWith(".html") || view.endsWith(".htm")) {
+            res.setContentType("text/html;charset=UTF-8");
+        } else if (view.endsWith(".jsp")) {
+            res.setContentType("text/html;charset=UTF-8");
+        } else if (view.endsWith(".json")) {
+            res.setContentType("application/json;charset=UTF-8");
+        }
+
         rd.forward(req, res);
     }
+
 }
-
-
-
-
