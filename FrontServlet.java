@@ -12,8 +12,8 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.List;
-import java.util.Map;
 import framework.util.*;
+import framework.views.ModelView; // added import
 
 public class FrontServlet extends HttpServlet {
     private RequestDispatcher defaultDispatcher;
@@ -29,10 +29,8 @@ public class FrontServlet extends HttpServlet {
 
             // debug : lister mappings depuis controllerMappings
             for (UrlMapping cm : scanResult.urlMappings) {
-                for (Map.Entry<String, Method> e : cm.getUrlToMethod().entrySet()) {
-                    System.out.println("Mapped URL: " + e.getKey() + " -> " +
-                            e.getValue().getDeclaringClass().getName() + "#" + e.getValue().getName());
-                }
+                System.out.println("Mapped URL: " + cm.getUrl() + " -> " +
+                        cm.getMethod().getDeclaringClass().getName() + "#" + cm.getMethod().getName());
             }
         } catch (Exception ex) {
             // conserver scanResult vide en cas d'erreur pour ne pas bloquer le servlet
@@ -69,8 +67,10 @@ public class FrontServlet extends HttpServlet {
         // Chercher un contrôleur pour cette URL
         Method m = null;
         for (UrlMapping cm : scanResult.urlMappings) {
-            m = cm.getUrlToMethod().get(path);
-            if (m != null) break;
+            if (cm.getUrl().equals(path)) {
+                m = cm.getMethod();
+                break;
+            }
         }
 
         if (m != null) {
@@ -97,54 +97,74 @@ public class FrontServlet extends HttpServlet {
     private boolean handleMappedMethod(HttpServletRequest req, HttpServletResponse res, Method m) throws IOException {
         Class<?> cls = m.getDeclaringClass();
 
-        res.setContentType("text/plain;charset=UTF-8");
-        try (PrintWriter out = res.getWriter()) {
-            // vérifier si la classe est annotée @Controller
-            if (!cls.isAnnotationPresent(framework.annotations.Controller.class)) {
-                out.printf("classe non annote controller : %s%n", cls.getName());
+        try {
+            Object target = Modifier.isStatic(m.getModifiers()) ? null : cls.getDeclaredConstructor().newInstance();
+            m.setAccessible(true);
+
+            Class<?>[] params = m.getParameterTypes();
+            Object result = null;
+
+            if (params.length == 0) {
+                result = m.invoke(target);
+            } else if (params.length == 1 && HttpServletRequest.class.isAssignableFrom(params[0])) {
+                result = m.invoke(target, req);
+            } else if (params.length == 2
+                    && HttpServletRequest.class.isAssignableFrom(params[0])
+                    && HttpServletResponse.class.isAssignableFrom(params[1])) {
+                // allow method to write directly to response
+                result = m.invoke(target, req, res);
+            } else {
+                try (PrintWriter out = res.getWriter()) {
+                    res.setContentType("text/plain;charset=UTF-8");
+                    out.println("Unsupported method signature for invocation");
+                }
                 return true;
             }
 
-            out.printf("Classe associe : %s%n", cls.getName());
-            out.printf("Nom de la methode: %s%n", m.getName());
-
-            try {
-                Object target = Modifier.isStatic(m.getModifiers()) ? null : cls.getDeclaredConstructor().newInstance();
-                m.setAccessible(true);
-
-                Class<?>[] params = m.getParameterTypes();
-                Object result = null;
-
-                if (params.length == 0) {
-                    result = m.invoke(target);
-                } else if (params.length == 1 && HttpServletRequest.class.isAssignableFrom(params[0])) {
-                    result = m.invoke(target, req);
-                } else if (params.length == 2
-                        && HttpServletRequest.class.isAssignableFrom(params[0])
-                        && HttpServletResponse.class.isAssignableFrom(params[1])) {
-                    // allow method to write directly to response
-                    result = m.invoke(target, req, res);
-                } else {
-                    out.println("Unsupported method signature for invocation");
-                    return true;
-                }
-
-                // appeler la fonction pour gérer le retour
-                handleReturnValue(out, m, result);
-            } catch (InvocationTargetException ite) {
-                Throwable cause = ite.getTargetException();
-                out.println("Erreur invocation: " + (cause != null ? cause.toString() : ite.toString()));
-                res.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-            } catch (Exception ex) {
-                out.println("Erreur invocation: " + ex.toString());
-                res.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            // si ModelView -> forward directement (on définit text/html dans handleModelView)
+            if (result instanceof framework.views.ModelView) {
+                handleModelView(req, res, (framework.views.ModelView) result);
+                return true;
             }
+
+            // sinon on écrit du texte -> là on fixe text/plain
+            try (PrintWriter out = res.getWriter()) {
+                res.setContentType("text/plain;charset=UTF-8");
+                handleReturnValue(out, req, res, m, result);
+            }
+
+        } catch (InvocationTargetException ite) {
+            try (PrintWriter out = res.getWriter()) {
+                res.setContentType("text/plain;charset=UTF-8");
+                out.println("Erreur invocation: " + ite.getTargetException());
+            }
+            res.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+        } catch (Exception ex) {
+            try (PrintWriter out = res.getWriter()) {
+                res.setContentType("text/plain;charset=UTF-8");
+                out.println("Erreur invocation: " + ex.toString());
+            }
+            res.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
         }
         return true;
     }
 
     // nouvelle fonction pour gérer le retour de la méthode
-    private void handleReturnValue(PrintWriter out, Method m, Object result) {
+    private void handleReturnValue(PrintWriter out, HttpServletRequest req, HttpServletResponse res, Method m, Object result) throws ServletException, IOException {
+        // si la méthode a retourné une String (extrait demandé)
+        if (result instanceof String) {
+            out.printf("Methode string invoquee : %s", (String) result);
+            return;
+        }
+
+        // si la méthode a retourné un ModelView -> déléguer au forward
+        if (result instanceof ModelView) {
+            // ne pas écrire dans la réponse ici, déléguer directement au forward
+            handleModelView(req, res, (ModelView) result);
+            return;
+        }
+
+        // fallback : ancien comportement sur le type de retour
         Class<?> returnType = m.getReturnType();
         if (returnType == String.class) {
             if (result != null) {
@@ -153,8 +173,34 @@ public class FrontServlet extends HttpServlet {
                 out.println("Retour null");
             }
         } else {
-            out.println("le type de retour n'est pas string");
+            out.println("le type de retour n'est pas string ni ModelView");
         }
+    }
+
+     // méthode dédiée pour gérer les ModelView (forward vers la vue)
+    private void handleModelView(HttpServletRequest req, HttpServletResponse res, ModelView mv) throws ServletException, IOException {
+        if (mv == null) {
+            res.setContentType("text/plain;charset=UTF-8");
+            res.getWriter().println("ModelView est null");
+            return;
+        }
+        String view = mv.getView();
+        if (view == null || view.isEmpty()) {
+            res.setContentType("text/plain;charset=UTF-8");
+            res.getWriter().println("ModelView.view est null ou vide");
+            return;
+        }
+
+        RequestDispatcher rd = req.getRequestDispatcher(view);
+        if (rd == null) {
+            res.setContentType("text/plain;charset=UTF-8");
+            res.getWriter().println("Impossible d'obtenir RequestDispatcher pour la vue: " + view);
+            return;
+        }
+
+        // IMPORTANT : indiquer HTML avant le forward pour que le conteneur serve la ressource en HTML
+        res.setContentType("text/html;charset=UTF-8");
+        rd.forward(req, res);
     }
 }
 
