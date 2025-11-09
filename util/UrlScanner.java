@@ -3,19 +3,17 @@ package framework.util;
 import jakarta.servlet.ServletContext;
 import java.io.File;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import framework.annotations.Controller;
 import framework.annotations.Url;
 
-public class ControllerScanner {
-
+public class UrlScanner {
     public static class ScanResult {
-        public final Map<String, Method> urlToMethod = new HashMap<>();
-        public final Set<Class<?>> controllerClasses = new HashSet<>();
+        public final List<UrlMapping> urlMappings = new ArrayList<>();
     }
 
     public static ScanResult scan(ServletContext ctx) {
@@ -47,25 +45,47 @@ public class ControllerScanner {
                 try {
                     Class<?> cls = loader.loadClass(fqcn);
 
-                    // chercher @Controller (framework.annotations.Controller)
-                    if (cls.isAnnotationPresent(Controller.class)) {
-                        result.controllerClasses.add(cls);
-                    }
+                    Map<String, Method> classMap = new HashMap<>();
+                    String base = deriveControllerBase(cls);
 
-                    // chercher @Url sur les méthodes (framework.annotations.Url)
+                    boolean hasUrlMethod = false;
                     for (Method m : cls.getDeclaredMethods()) {
+                        String path = null;
+
                         if (m.isAnnotationPresent(Url.class)) {
                             Url u = m.getAnnotation(Url.class);
-                            String path = u.value();
-                            if (path == null) continue;
-                            if (!path.startsWith("/")) path = "/" + path;
-                            result.urlToMethod.put(path, m);
+                            path = u.value();
+                            hasUrlMethod = true;
+                        } else if (cls.isAnnotationPresent(Controller.class)) {
+                            String action = m.getName();
+                            if ("index".equals(action)) {
+                                path = base;
+                            } else {
+                                path = base.endsWith("/") ? base + action : base + "/" + action;
+                            }
                         }
+
+                        if (path == null) continue;
+                        if (!path.startsWith("/")) path = "/" + path;
+                        classMap.put(path.toLowerCase(), m);
                     }
+
+                    if (cls.isAnnotationPresent(Controller.class) || hasUrlMethod) {
+                        result.urlMappings.add(new UrlMapping(cls, classMap));
+                    }
+
                 } catch (ClassNotFoundException | NoClassDefFoundError e) {
-                    // la classe n'est pas disponible au runtime : ignorer
+                    // ignore classes non disponibles au runtime
                 }
             }
         }
+    }
+
+    private static String deriveControllerBase(Class<?> cls) {
+        String name = cls.getSimpleName();
+        if (name.endsWith("Controller")) {
+            name = name.substring(0, name.length() - "Controller".length());
+        }
+        return "/" + name.toLowerCase();
     }
 }
