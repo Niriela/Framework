@@ -11,10 +11,9 @@ import java.util.Map;
 import framework.annotations.Controller;
 import framework.annotations.Url;
 
-public class ControllerScanner {
-
+public class UrlScanner {
     public static class ScanResult {
-        public final List<ControllerMapping> controllerMappings = new ArrayList<>();
+        public final List<UrlMapping> urlMappings = new ArrayList<>();
     }
 
     public static ScanResult scan(ServletContext ctx) {
@@ -46,24 +45,18 @@ public class ControllerScanner {
                 try {
                     Class<?> cls = loader.loadClass(fqcn);
 
-                    // vérifier que la classe est annotée @Controller
-                    if (!cls.isAnnotationPresent(Controller.class)) {
-                        continue; // ignorer les classes sans @Controller
-                    }
-
-                    // construire le mapping pour cette classe (url -> Method)
                     Map<String, Method> classMap = new HashMap<>();
                     String base = deriveControllerBase(cls);
 
+                    boolean hasUrlMethod = false;
                     for (Method m : cls.getDeclaredMethods()) {
                         String path = null;
 
-                        // si méthode annotée @Url -> utiliser sa valeur
                         if (m.isAnnotationPresent(Url.class)) {
                             Url u = m.getAnnotation(Url.class);
                             path = u.value();
-                        } else {
-                            // mapping automatique : base (+ /action sauf index)
+                            hasUrlMethod = true;
+                        } else if (cls.isAnnotationPresent(Controller.class)) {
                             String action = m.getName();
                             if ("index".equals(action)) {
                                 path = base;
@@ -74,11 +67,12 @@ public class ControllerScanner {
 
                         if (path == null) continue;
                         if (!path.startsWith("/")) path = "/" + path;
-                        classMap.put(path, m);
+                        classMap.put(path.toLowerCase(), m);
                     }
 
-                    // ajouter ControllerMapping pour usage futur
-                    result.controllerMappings.add(new ControllerMapping(cls, classMap));
+                    if (cls.isAnnotationPresent(Controller.class) || hasUrlMethod) {
+                        result.urlMappings.add(new UrlMapping(cls, classMap));
+                    }
 
                 } catch (ClassNotFoundException | NoClassDefFoundError e) {
                     // ignore classes non disponibles au runtime

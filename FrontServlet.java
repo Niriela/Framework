@@ -13,23 +13,22 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.List;
 import java.util.Map;
-import framework.util.ControllerScanner;
-import framework.util.ControllerMapping;
+import framework.util.*;
 
 public class FrontServlet extends HttpServlet {
     private RequestDispatcher defaultDispatcher;
-    private ControllerScanner.ScanResult scanResult = new ControllerScanner.ScanResult();
+    private UrlScanner.ScanResult scanResult = new UrlScanner.ScanResult();
 
     @Override
     public void init() {
         defaultDispatcher = getServletContext().getNamedDispatcher("default");
         try {
-            scanResult = ControllerScanner.scan(getServletContext());
+            scanResult = UrlScanner.scan(getServletContext());
             // mettre les mappings dans le ServletContext pour usage par d'autres composants
-            getServletContext().setAttribute("controllerMappings", scanResult.controllerMappings);
+            getServletContext().setAttribute("controllerMappings", scanResult.urlMappings);
 
             // debug : lister mappings depuis controllerMappings
-            for (ControllerMapping cm : scanResult.controllerMappings) {
+            for (UrlMapping cm : scanResult.urlMappings) {
                 for (Map.Entry<String, Method> e : cm.getUrlToMethod().entrySet()) {
                     System.out.println("Mapped URL: " + e.getKey() + " -> " +
                             e.getValue().getDeclaringClass().getName() + "#" + e.getValue().getName());
@@ -37,27 +36,39 @@ public class FrontServlet extends HttpServlet {
             }
         } catch (Exception ex) {
             // conserver scanResult vide en cas d'erreur pour ne pas bloquer le servlet
-            scanResult = new ControllerScanner.ScanResult();
+            scanResult = new UrlScanner.ScanResult();
             System.err.println("ControllerScanner init error: " + ex.getMessage());
         }
     }
 
     @Override
     protected void service(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
-        String path = req.getRequestURI().substring(req.getContextPath().length());
+    String path = req.getRequestURI().substring(req.getContextPath().length()).toLowerCase();
 
-        // Si c'est une ressource statique (.jsp, .html, .css, .js, etc)
-        if (path.endsWith(".jsp") || path.endsWith(".html")) {
+        // Vérifier si la ressource existe
+        boolean ressources = getServletContext().getResource(path) != null;
+
+        // Si c'est la racine, afficher un message personnalisé
+        if ("/".equals(path)) {
+            res.setContentType("text/html");
+            try (PrintWriter out = res.getWriter()) {
+                out.println("<ml><body>");
+                out.println("<h1>Path: /</h1>");
+                out.println("</body></html>");
+            }
+            return;
+        } else if (ressources) {
+            // Si c'est une ressource statique existante, la servir avec le default dispatcher
             RequestDispatcher rd = getServletContext().getNamedDispatcher("default");
             if (rd != null) {
                 rd.forward(req, res);
                 return;
-            }
+            } 
         }
 
         // Chercher un contrôleur pour cette URL
         Method m = null;
-        for (ControllerMapping cm : scanResult.controllerMappings) {
+        for (UrlMapping cm : scanResult.urlMappings) {
             m = cm.getUrlToMethod().get(path);
             if (m != null) break;
         }
@@ -66,19 +77,19 @@ public class FrontServlet extends HttpServlet {
             if (handleMappedMethod(req, res, m)) return;
         }
 
-        // Si rien ne correspond, page not found
-        customServe(req, res);
+        // Si rien ne correspond, afficher un message personnalisé
+         customServe(req, res);
+        
     }
 
 
     private void customServe(HttpServletRequest req, HttpServletResponse res) throws IOException {
+        String path = req.getRequestURI().substring(req.getContextPath().length());
+        res.setContentType("text/html");
         try (PrintWriter out = res.getWriter()) {
-            String uri = req.getRequestURI();
-            String responseBody = "<html><head><title> File not found </title></head><body>" +
-                    "<h1>File not found</h1> <p> Requested URL: <strong>" + uri + "</strong></p>" +
-                    "</body></html>";
-            res.setContentType("text/html;charset=UTF-8");
-            out.println(responseBody);
+            out.println("<html><body>");
+            out.println("<h1>Path: " + path + "</h1>");
+            out.println("</body></html>");
         }
     }
 
