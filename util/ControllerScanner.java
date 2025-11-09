@@ -3,10 +3,10 @@ package framework.util;
 import jakarta.servlet.ServletContext;
 import java.io.File;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import framework.annotations.Controller;
 import framework.annotations.Url;
@@ -14,8 +14,7 @@ import framework.annotations.Url;
 public class ControllerScanner {
 
     public static class ScanResult {
-        public final Map<String, Method> urlToMethod = new HashMap<>();
-        public final Set<Class<?>> controllerClasses = new HashSet<>();
+        public final List<ControllerMapping> controllerMappings = new ArrayList<>();
     }
 
     public static ScanResult scan(ServletContext ctx) {
@@ -47,25 +46,52 @@ public class ControllerScanner {
                 try {
                     Class<?> cls = loader.loadClass(fqcn);
 
-                    // chercher @Controller (framework.annotations.Controller)
-                    if (cls.isAnnotationPresent(Controller.class)) {
-                        result.controllerClasses.add(cls);
+                    // vérifier que la classe est annotée @Controller
+                    if (!cls.isAnnotationPresent(Controller.class)) {
+                        continue; // ignorer les classes sans @Controller
                     }
 
-                    // chercher @Url sur les méthodes (framework.annotations.Url)
+                    // construire le mapping pour cette classe (url -> Method)
+                    Map<String, Method> classMap = new HashMap<>();
+                    String base = deriveControllerBase(cls);
+
                     for (Method m : cls.getDeclaredMethods()) {
+                        String path = null;
+
+                        // si méthode annotée @Url -> utiliser sa valeur
                         if (m.isAnnotationPresent(Url.class)) {
                             Url u = m.getAnnotation(Url.class);
-                            String path = u.value();
-                            if (path == null) continue;
-                            if (!path.startsWith("/")) path = "/" + path;
-                            result.urlToMethod.put(path, m);
+                            path = u.value();
+                        } else {
+                            // mapping automatique : base (+ /action sauf index)
+                            String action = m.getName();
+                            if ("index".equals(action)) {
+                                path = base;
+                            } else {
+                                path = base.endsWith("/") ? base + action : base + "/" + action;
+                            }
                         }
+
+                        if (path == null) continue;
+                        if (!path.startsWith("/")) path = "/" + path;
+                        classMap.put(path, m);
                     }
+
+                    // ajouter ControllerMapping pour usage futur
+                    result.controllerMappings.add(new ControllerMapping(cls, classMap));
+
                 } catch (ClassNotFoundException | NoClassDefFoundError e) {
-                    // la classe n'est pas disponible au runtime : ignorer
+                    // ignore classes non disponibles au runtime
                 }
             }
         }
+    }
+
+    private static String deriveControllerBase(Class<?> cls) {
+        String name = cls.getSimpleName();
+        if (name.endsWith("Controller")) {
+            name = name.substring(0, name.length() - "Controller".length());
+        }
+        return "/" + name.toLowerCase();
     }
 }
