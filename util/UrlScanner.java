@@ -4,9 +4,9 @@ import jakarta.servlet.ServletContext;
 import java.io.File;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 
 import framework.annotations.Controller;
 import framework.annotations.Url;
@@ -45,18 +45,19 @@ public class UrlScanner {
                 try {
                     Class<?> cls = loader.loadClass(fqcn);
 
-                    Map<String, Method> classMap = new HashMap<>();
                     String base = deriveControllerBase(cls);
+                    Set<String> seen = new HashSet<>();
 
-                    boolean hasUrlMethod = false;
                     for (Method m : cls.getDeclaredMethods()) {
                         String path = null;
 
+                        // méthode explicitement annotée @Url -> on enregistre toujours
                         if (m.isAnnotationPresent(Url.class)) {
                             Url u = m.getAnnotation(Url.class);
                             path = u.value();
-                            hasUrlMethod = true;
-                        } else if (cls.isAnnotationPresent(Controller.class)) {
+                        }
+                        // si la classe est un @Controller, on génère des paths à partir du nom de la méthode
+                        else if (cls.isAnnotationPresent(Controller.class)) {
                             String action = m.getName();
                             if ("index".equals(action)) {
                                 path = base;
@@ -67,11 +68,14 @@ public class UrlScanner {
 
                         if (path == null) continue;
                         if (!path.startsWith("/")) path = "/" + path;
-                        classMap.put(path.toLowerCase(), m);
-                    }
+                        path = path.toLowerCase();
 
-                    if (cls.isAnnotationPresent(Controller.class) || hasUrlMethod) {
-                        result.urlMappings.add(new UrlMapping(cls, classMap));
+                        // éviter doublons
+                        if (seen.contains(path)) continue;
+                        seen.add(path);
+
+                        // ajouter mapping individuel (url -> méthode)
+                        result.urlMappings.add(new UrlMapping(path, m));
                     }
 
                 } catch (ClassNotFoundException | NoClassDefFoundError e) {
