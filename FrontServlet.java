@@ -230,15 +230,6 @@ public class FrontServlet extends HttpServlet {
             return;
         }
 
-        // ✅ Forcer le bon Content-Type avant le forward
-        if (view.endsWith(".html") || view.endsWith(".htm")) {
-            res.setContentType("text/html;charset=UTF-8");
-        } else if (view.endsWith(".jsp")) {
-            res.setContentType("text/html;charset=UTF-8");
-        } else if (view.endsWith(".json")) {
-            res.setContentType("application/json;charset=UTF-8");
-        }
-
         rd.forward(req, res);
     }
 
