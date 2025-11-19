@@ -30,6 +30,28 @@ public class UrlScanner {
         return result;
     }
 
+    // Nouvelle fonction : vérifie si un pattern contient des paramètres
+    private static boolean hasPathParam(String urlPattern) {
+        return urlPattern != null && urlPattern.matches(".*\\{[^/]+\\}.*");
+    }
+
+    // Nouvelle fonction : convertit un pattern en regex
+    private static String patternToRegex(String urlPattern) {
+        return urlPattern.replaceAll("\\{[^/]+\\}", "[^/]+");
+    }
+
+    // Nouvelle fonction : extrait les noms de paramètres du pattern
+    private static List<String> extractParamNames(String urlPattern) {
+        List<String> params = new ArrayList<>();
+        String[] parts = urlPattern.split("/");
+        for (String part : parts) {
+            if (part.startsWith("{") && part.endsWith("}")) {
+                params.add(part.substring(1, part.length() - 1));
+            }
+        }
+        return params;
+    }
+
     private static void scanDir(File root, File current, ClassLoader loader, ScanResult result) {
         File[] children = current.listFiles();
         if (children == null) return;
@@ -51,13 +73,10 @@ public class UrlScanner {
                     for (Method m : cls.getDeclaredMethods()) {
                         String path = null;
 
-                        // méthode explicitement annotée @Url -> on enregistre toujours
                         if (m.isAnnotationPresent(Url.class)) {
                             Url u = m.getAnnotation(Url.class);
                             path = u.value();
-                        }
-                        // si la classe est un @Controller, on génère des paths à partir du nom de la méthode
-                        else if (cls.isAnnotationPresent(Controller.class)) {
+                        } else if (cls.isAnnotationPresent(framework.annotations.Controller.class)) {
                             String action = m.getName();
                             if ("index".equals(action)) {
                                 path = base;
@@ -74,8 +93,13 @@ public class UrlScanner {
                         if (seen.contains(path)) continue;
                         seen.add(path);
 
-                        // ajouter mapping individuel (url -> méthode)
-                        result.urlMappings.add(new UrlMapping(path, m));
+                        // Ajout du mapping, enregistre aussi le regex et les noms de paramètres si besoin
+                        UrlMapping mapping = new UrlMapping(path, m);
+                        if (hasPathParam(path)) {
+                            mapping.setRegex(patternToRegex(path));
+                            mapping.setParamNames(extractParamNames(path));
+                        }
+                        result.urlMappings.add(mapping);
                     }
 
                 } catch (ClassNotFoundException | NoClassDefFoundError e) {
