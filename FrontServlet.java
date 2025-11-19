@@ -223,6 +223,13 @@ public class FrontServlet extends HttpServlet {
             return;
         }
 
+        // Ajout des données du ModelView dans la requête
+        if (mv.getData() != null) {
+            for (String key : mv.getData().keySet()) {
+                req.setAttribute(key, mv.getData().get(key));
+            }
+        }
+
         RequestDispatcher rd = req.getRequestDispatcher(view);
         if (rd == null) {
             res.setContentType("text/plain;charset=UTF-8");
