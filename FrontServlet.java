@@ -15,6 +15,7 @@ import java.util.List;
 import framework.util.*;
 import framework.util.ParamConverter;
 import framework.views.ModelView; // added import
+import framework.annotations.Param;
 
 public class FrontServlet extends HttpServlet {
     private RequestDispatcher defaultDispatcher;
@@ -113,9 +114,8 @@ public class FrontServlet extends HttpServlet {
                     && HttpServletResponse.class.isAssignableFrom(params[1])) {
                 result = m.invoke(target, req, res);
             } else {
-                // Injection automatique des paramètres du formulaire
-                Object[] args = buildMethodArgs(req, m);
-                result = m.invoke(target, args);
+                // Appel de invokeMethod pour gérer les paramètres annotés avec @Param
+                result = invokeMethod(m, req, target);
             }
 
             // si ModelView -> forward directement (SANS écrire avant)
@@ -124,11 +124,9 @@ public class FrontServlet extends HttpServlet {
                 return true;
             }
 
-            // sinon on écrit du texte -> là on fixe text/plain ET on écrit le debug +
-            // résultat
+            // sinon on écrit du texte
             try (PrintWriter out = res.getWriter()) {
                 res.setContentType("text/plain;charset=UTF-8");
-                // vérifier si la classe est annotée @Controller
                 if (!cls.isAnnotationPresent(framework.annotations.Controller.class)) {
                     out.printf("classe non annote controller : %s%n", cls.getName());
                 } else {
@@ -250,6 +248,40 @@ public class FrontServlet extends HttpServlet {
             }
         }
         return null;
+    }
+
+    private Object invokeMethod(Method method, HttpServletRequest request, Object controllerInstance) throws Exception {
+        java.lang.reflect.Parameter[] parameters = method.getParameters();
+        Object[] args = new Object[parameters.length];
+        
+        for (int i = 0; i < parameters.length; i++) {
+            java.lang.reflect.Parameter param = parameters[i];
+            Param paramAnnotation = param.getAnnotation(Param.class);
+            
+            if (paramAnnotation != null) {
+                String paramName = paramAnnotation.value();
+                String paramValue = request.getParameter(paramName);
+                
+                // Si le paramètre n'existe pas dans la requête, chercher dans les attributs (variables de chemin)
+                if (paramValue == null) {
+                    Object attr = request.getAttribute(paramName);
+                    if (attr != null) {
+                        paramValue = String.valueOf(attr);
+                    }
+                }
+                
+                if (paramValue != null && !paramValue.isEmpty()) {
+                    Class<?> paramType = param.getType();
+                    args[i] = ParamConverter.convert(paramValue, paramType);
+                } else {
+                    args[i] = null;
+                }
+            } else {
+                args[i] = null;
+            }
+        }
+        
+        return method.invoke(controllerInstance, args);
     }
 
 }
