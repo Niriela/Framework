@@ -226,6 +226,9 @@ public class FrontServlet extends HttpServlet {
     private UrlMapping findUrlMapping(String path, HttpServletRequest req) {
         for (UrlMapping mapping : scanResult.urlMappings) {
             String urlPattern = mapping.getUrl();
+            if (!urlPattern.startsWith("/")) {
+                urlPattern = "/" + urlPattern;
+            }
             // Si le pattern contient {param}
             if (urlPattern.contains("{")) {
                 // Convertir le pattern en regex
