@@ -13,6 +13,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.List;
 import framework.util.*;
+import framework.util.ParamConverter;
 import framework.views.ModelView; // added import
 
 public class FrontServlet extends HttpServlet {
@@ -110,14 +111,11 @@ public class FrontServlet extends HttpServlet {
             } else if (params.length == 2
                     && HttpServletRequest.class.isAssignableFrom(params[0])
                     && HttpServletResponse.class.isAssignableFrom(params[1])) {
-                // allow method to write directly to response
                 result = m.invoke(target, req, res);
             } else {
-                try (PrintWriter out = res.getWriter()) {
-                    res.setContentType("text/plain;charset=UTF-8");
-                    out.println("Unsupported method signature for invocation");
-                }
-                return true;
+                // Injection automatique des paramètres du formulaire
+                Object[] args = buildMethodArgs(req, m);
+                result = m.invoke(target, args);
             }
 
             // si ModelView -> forward directement (SANS écrire avant)
@@ -210,6 +208,21 @@ public class FrontServlet extends HttpServlet {
         rd.forward(req, res);
     }
 
+    private Object[] buildMethodArgs(HttpServletRequest req, Method m) {
+        Class<?>[] paramTypes = m.getParameterTypes();
+        java.lang.reflect.Parameter[] params = m.getParameters();
+        Object[] args = new Object[paramTypes.length];
+
+        for (int i = 0; i < paramTypes.length; i++) {
+            String paramName = params[i].getName(); // nécessite -parameters à la compilation
+            String value = req.getParameter(paramName);
+            Class<?> t = paramTypes[i];
+
+            args[i] = ParamConverter.convert(value, t);
+        }
+        return args;
+    }
+    
     private UrlMapping findUrlMapping(String path, HttpServletRequest req) {
         for (UrlMapping mapping : scanResult.urlMappings) {
             String urlPattern = mapping.getUrl();
