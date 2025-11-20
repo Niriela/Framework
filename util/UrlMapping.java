@@ -1,6 +1,7 @@
 package framework.util;
 
 import java.lang.reflect.Method;
+import java.util.List;
 
 /**
  * Représente un mapping d'URL vers une méthode (entrée unique).
@@ -10,6 +11,9 @@ public class UrlMapping {
     public final String url;
     public final Method method;
     public final Class<?> mappedClass;
+
+    private String regex;
+    private List<String> paramNames;
 
     // Constructeur principal utilisé par UrlScanner
     public UrlMapping(String url, Method method) {
@@ -29,5 +33,21 @@ public class UrlMapping {
 
     public Class<?> getMappedClass() {
         return mappedClass;
+    }
+
+    public void setRegex(String regex) {
+        this.regex = regex;
+    }
+
+    public String getRegex() {
+        return regex;
+    }
+
+    public void setParamNames(List<String> paramNames) {
+        this.paramNames = paramNames;
+    }
+
+    public List<String> getParamNames() {
+        return paramNames;
     }
 }

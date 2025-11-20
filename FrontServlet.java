@@ -68,11 +68,9 @@ public class FrontServlet extends HttpServlet {
 
         // Chercher un contrôleur pour cette URL
         Method m = null;
-        for (UrlMapping cm : scanResult.urlMappings) {
-            if (cm.getUrl().equals(path)) {
-                m = cm.getMethod();
-                break;
-            }
+        UrlMapping matchedMapping = findUrlMapping(path, req);
+        if (matchedMapping != null) {
+            m = matchedMapping.getMethod();
         }
 
         if (m != null) {
@@ -178,7 +176,6 @@ public class FrontServlet extends HttpServlet {
         }
     }
 
-
     private void handleModelView(HttpServletRequest req, HttpServletResponse res, ModelView mv)
             throws ServletException, IOException {
         if (mv == null) {
@@ -224,6 +221,32 @@ public class FrontServlet extends HttpServlet {
             args[i] = ParamConverter.convert(value, t);
         }
         return args;
+    }
+    
+    private UrlMapping findUrlMapping(String path, HttpServletRequest req) {
+        for (UrlMapping mapping : scanResult.urlMappings) {
+            String urlPattern = mapping.getUrl();
+            // Si le pattern contient {param}
+            if (urlPattern.contains("{")) {
+                // Convertir le pattern en regex
+                String regex = urlPattern.replaceAll("\\{[^/]+\\}", "([^/]+)");
+                if (path.matches(regex)) {
+                    // Extraire le paramètre
+                    String[] patternParts = urlPattern.split("/");
+                    String[] pathParts = path.split("/");
+                    for (int i = 0; i < patternParts.length; i++) {
+                        if (patternParts[i].startsWith("{") && patternParts[i].endsWith("}")) {
+                            String paramName = patternParts[i].substring(1, patternParts[i].length() - 1);
+                            req.setAttribute(paramName, pathParts[i]);
+                        }
+                    }
+                    return mapping;
+                }
+            } else if (urlPattern.equals(path)) {
+                return mapping;
+            }
+        }
+        return null;
     }
 
 }
