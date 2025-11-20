@@ -15,7 +15,7 @@ import java.util.List;
 import framework.util.*;
 import framework.util.ParamConverter;
 import framework.views.ModelView; // added import
-import framework.annotations.Param;
+import framework.annotations.*;; // added import
 
 public class FrontServlet extends HttpServlet {
     private RequestDispatcher defaultDispatcher;
@@ -155,23 +155,23 @@ public class FrontServlet extends HttpServlet {
     // nouvelle fonction pour gérer le retour de la méthode
     private void handleReturnValue(PrintWriter out, HttpServletRequest req, HttpServletResponse res, Method m,
             Object result) throws ServletException, IOException {
-        // si la méthode a retourné une String (extrait demandé)
+        
+        Class<?> returnType = m.getReturnType();
+        
+        // Si String
         if (result instanceof String) {
             out.printf("Methode string invoquee : %s", (String) result);
             return;
         }
-
-        // fallback : ancien comportement sur le type de retour
-        Class<?> returnType = m.getReturnType();
-        if (returnType == String.class) {
-            if (result != null) {
-                out.println(result.toString());
-            } else {
-                out.println("Retour null");
-            }
-        } else {
-            out.println("le type de retour n'est pas string ni ModelView");
+        
+        // Si int, double, float, boolean, etc.
+        if (result != null) {
+            out.println(result.toString());
+            return;
         }
+        
+        // Si null
+        out.println("Retour null");
     }
 
     private void handleModelView(HttpServletRequest req, HttpServletResponse res, ModelView mv)
@@ -259,15 +259,13 @@ public class FrontServlet extends HttpServlet {
             Param paramAnnotation = param.getAnnotation(Param.class);
             
             if (paramAnnotation != null) {
+                // Gestion de @Param
                 String paramName = paramAnnotation.value();
                 String paramValue = request.getParameter(paramName);
                 
-                // Si le paramètre n'existe pas dans la requête, chercher dans les attributs (variables de chemin)
                 if (paramValue == null) {
                     Object attr = request.getAttribute(paramName);
-                    if (attr != null) {
-                        paramValue = String.valueOf(attr);
-                    }
+                    if (attr != null) paramValue = String.valueOf(attr);
                 }
                 
                 if (paramValue != null && !paramValue.isEmpty()) {
@@ -277,7 +275,22 @@ public class FrontServlet extends HttpServlet {
                     args[i] = null;
                 }
             } else {
-                args[i] = null;
+                // Pas d'annotation @Param : chercher automatiquement par le nom du paramètre
+                String paramName = param.getName();
+                String paramValue = request.getParameter(paramName);
+                
+                // Si pas en paramètre de requête, chercher dans les attributs (variables de chemin)
+                if (paramValue == null) {
+                    Object attr = request.getAttribute(paramName);
+                    if (attr != null) paramValue = String.valueOf(attr);
+                }
+                
+                if (paramValue != null && !paramValue.isEmpty()) {
+                    Class<?> paramType = param.getType();
+                    args[i] = ParamConverter.convert(paramValue, paramType);
+                } else {
+                    args[i] = null;
+                }
             }
         }
         
