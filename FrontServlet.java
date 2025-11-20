@@ -13,6 +13,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.List;
 import framework.util.*;
+import framework.util.ParamConverter;
 import framework.views.ModelView; // added import
 
 public class FrontServlet extends HttpServlet {
@@ -112,14 +113,11 @@ public class FrontServlet extends HttpServlet {
             } else if (params.length == 2
                     && HttpServletRequest.class.isAssignableFrom(params[0])
                     && HttpServletResponse.class.isAssignableFrom(params[1])) {
-                // allow method to write directly to response
                 result = m.invoke(target, req, res);
             } else {
-                try (PrintWriter out = res.getWriter()) {
-                    res.setContentType("text/plain;charset=UTF-8");
-                    out.println("Unsupported method signature for invocation");
-                }
-                return true;
+                // Injection automatique des paramètres du formulaire
+                Object[] args = buildMethodArgs(req, m);
+                result = m.invoke(target, args);
             }
 
             // si ModelView -> forward directement (SANS écrire avant)
@@ -180,33 +178,6 @@ public class FrontServlet extends HttpServlet {
         }
     }
 
-    // private void handleModelView(HttpServletRequest req, HttpServletResponse res,
-    // ModelView mv)
-    // throws ServletException, IOException {
-    // if (mv == null) {
-    // res.setContentType("text/plain;charset=UTF-8");
-    // res.getWriter().println("ModelView est null");
-    // return;
-    // }
-
-    // String view = mv.getView();
-    // if (view == null || view.isEmpty()) {
-    // res.setContentType("text/plain;charset=UTF-8");
-    // res.getWriter().println("ModelView.view est null ou vide");
-    // return;
-    // }
-
-    // RequestDispatcher rd = req.getRequestDispatcher(view);
-    // if (rd == null) {
-    // res.setContentType("text/plain;charset=UTF-8");
-    // res.getWriter().println("Impossible d'obtenir RequestDispatcher pour la vue:
-    // " + view);
-    // return;
-    // }
-
-    // // NE PAS définir le Content-Type - laissez le dispatcher s'en charger
-    // rd.forward(req, res);
-    // }
 
     private void handleModelView(HttpServletRequest req, HttpServletResponse res, ModelView mv)
             throws ServletException, IOException {
@@ -238,6 +209,21 @@ public class FrontServlet extends HttpServlet {
         }
 
         rd.forward(req, res);
+    }
+
+    private Object[] buildMethodArgs(HttpServletRequest req, Method m) {
+        Class<?>[] paramTypes = m.getParameterTypes();
+        java.lang.reflect.Parameter[] params = m.getParameters();
+        Object[] args = new Object[paramTypes.length];
+
+        for (int i = 0; i < paramTypes.length; i++) {
+            String paramName = params[i].getName(); // nécessite -parameters à la compilation
+            String value = req.getParameter(paramName);
+            Class<?> t = paramTypes[i];
+
+            args[i] = ParamConverter.convert(value, t);
+        }
+        return args;
     }
 
 }
