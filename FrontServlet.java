@@ -11,77 +11,161 @@ import java.io.PrintWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.HashMap;
 import java.util.List;
+
 import framework.util.*;
-import framework.util.ParamConverter;
-import framework.views.ModelView; // added import
-import framework.annotations.*;; // added import
+import framework.views.ModelView;
+import framework.annotations.*;
 
 public class FrontServlet extends HttpServlet {
-    private RequestDispatcher defaultDispatcher;
     private UrlScanner.ScanResult scanResult = new UrlScanner.ScanResult();
+    // HashMap pour ActionMapping
+    private HashMap<String, List<ActionMapping>> actionMappings = new HashMap<>();
 
     @Override
     public void init() {
-        defaultDispatcher = getServletContext().getNamedDispatcher("default");
         try {
+            // Ancien système (pour compatibilité)
             scanResult = UrlScanner.scan(getServletContext());
-            // mettre les mappings dans le ServletContext pour usage par d'autres composants
+            
+            //  : Utiliser getAllUrl()
+            actionMappings = UrlScanner.getAllUrl(getServletContext());
+            
             getServletContext().setAttribute("controllerMappings", scanResult.urlMappings);
 
-            // debug : lister mappings depuis controllerMappings
+            // Debug
+            System.out.println("=== UrlMapping (ancien) ===");
             for (UrlMapping cm : scanResult.urlMappings) {
                 System.out.println("Mapped URL: " + cm.getUrl() + " -> " +
                         cm.getMethod().getDeclaringClass().getName() + "#" + cm.getMethod().getName());
             }
+            
+            // ActionMapping (nouveau)
+            System.out.println("\n=== ActionMapping (nouveau) ===");
+            for (String url : actionMappings.keySet()) {
+                List<ActionMapping> list = actionMappings.get(url);
+                for (ActionMapping am : list) {
+                    System.out.println("Mapped URL: " + url + " -> " + 
+                            am.getTheClassName() + "#" + am.getTheMethod().getName() + 
+                            " [" + am.getHttpMethod() + "]");
+                }
+            }
+            
         } catch (Exception ex) {
-            // conserver scanResult vide en cas d'erreur pour ne pas bloquer le servlet
             scanResult = new UrlScanner.ScanResult();
-            System.err.println("ControllerScanner init error: " + ex.getMessage());
+            actionMappings = new HashMap<>();
+            System.err.println("Scanner init error: " + ex.getMessage());
+            ex.printStackTrace();
         }
     }
 
     @Override
-    protected void service(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
-        String path = req.getRequestURI().substring(req.getContextPath().length()).toLowerCase();
+    protected void doGet(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
+        handleRequest(req, res);
+    }
 
-        // Vérifier si la ressource existe
-        boolean ressources = getServletContext().getResource(path) != null;
+    @Override
+    protected void doPost(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
+        handleRequest(req, res);
+    }
 
-        // Si c'est la racine, afficher un message personnalisé
-        if ("/".equals(path)) {
-            res.setContentType("text/html");
-            try (PrintWriter out = res.getWriter()) {
-                out.println("<ml><body>");
-                out.println("<h1>Path: /</h1>");
-                out.println("</body></html>");
-            }
-            return;
-        } else if (ressources) {
-            // Si c'est une ressource statique existante, la servir avec le default
-            // dispatcher
+    private void handleRequest(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
+        String fullUri = req.getRequestURI();
+        String context = req.getContextPath();
+        String matchPath = fullUri.startsWith(context) ? fullUri.substring(context.length()) : fullUri;
+        
+        if (matchPath.isEmpty()) matchPath = "/";
+        if (matchPath.length() > 1 && matchPath.endsWith("/")) 
+            matchPath = matchPath.substring(0, matchPath.length() - 1);
+
+        System.out.println("handleRequest: fullUri=" + fullUri + " context=" + context + " -> matchPath=" + matchPath + " method=" + req.getMethod());
+
+        // Vérifier ressources statiques
+        boolean ressources = getServletContext().getResource(matchPath) != null;
+        if (ressources) {
             RequestDispatcher rd = getServletContext().getNamedDispatcher("default");
-            if (rd != null) {
-                rd.forward(req, res);
-                return;
+            if (rd != null) rd.forward(req, res);
+            return;
+        }
+
+        // Essayer d'abord avec ActionMapping (nouveau système)
+        ActionMapping actionMapping = findActionMapping(matchPath, req.getMethod(), req);
+        if (actionMapping != null) {
+            handleActionMapping(req, res, actionMapping);
+            return;
+        }
+
+        // Fallback : utiliser UrlMatcher (ancien système)
+        UrlMapping matchedMapping = UrlMatcher.findMapping(matchPath, req.getMethod(), scanResult.urlMappings, req);
+        if (matchedMapping != null) {
+            handleMappedMethod(req, res, matchedMapping.getMethod());
+        } else {
+            customServe(req, res);
+        }
+    }
+
+    //  MÉTHODE : Trouver ActionMapping
+    private ActionMapping findActionMapping(String path, String httpMethod, HttpServletRequest req) {
+        System.out.println("=== RECHERCHE ACTION MAPPING ===");
+        
+        // 1) Correspondance exacte
+        if (actionMappings.containsKey(path)) {
+            List<ActionMapping> list = actionMappings.get(path);
+            for (ActionMapping am : list) {
+                if ("ALL".equals(am.getHttpMethod()) || httpMethod.equals(am.getHttpMethod())) {
+                    System.out.println("  ✓✓ TROUVÉ ActionMapping exact : " + path);
+                    return am;
+                }
             }
         }
-
-        // Chercher un contrôleur pour cette URL
-        Method m = null;
-        UrlMapping matchedMapping = findUrlMapping(path, req);
-        if (matchedMapping != null) {
-            m = matchedMapping.getMethod();
+        
+        // 2) Correspondance dynamique avec {param}
+        for (String pattern : actionMappings.keySet()) {
+            if (pattern.contains("{")) {
+                String regex = pattern.replaceAll("\\{[^/]+\\}", "([^/]+)");
+                if (path.toLowerCase().matches(regex.toLowerCase())) {
+                    extractPathParams(pattern, path, req);
+                    List<ActionMapping> list = actionMappings.get(pattern);
+                    for (ActionMapping am : list) {
+                        if ("ALL".equals(am.getHttpMethod()) || httpMethod.equals(am.getHttpMethod())) {
+                            System.out.println("  ✓✓ TROUVÉ ActionMapping dynamique : " + pattern);
+                            return am;
+                        }
+                    }
+                }
+            }
         }
+        
+        System.out.println(" Aucun ActionMapping trouvé");
+        return null;
+    }
 
-        if (m != null) {
-            if (handleMappedMethod(req, res, m))
-                return;
+    //  MÉTHODE : Gérer ActionMapping
+    private void handleActionMapping(HttpServletRequest req, HttpServletResponse res, ActionMapping am) throws IOException {
+        try {
+            Class<?> controllerClass = Class.forName(am.getTheClassName());
+            Object controller = controllerClass.getDeclaredConstructor().newInstance();
+            Object result = invokeMethod(am.getTheMethod(), req, controller);
+            handleReturnValue(res.getWriter(), req, res, am.getTheMethod(), result);
+        } catch (Exception ex) {
+            res.setContentType("text/plain;charset=UTF-8");
+            res.getWriter().println("Erreur invocation ActionMapping: " + ex.toString());
+            ex.printStackTrace();
         }
+    }
 
-        // Si rien ne correspond, afficher un message personnalisé
-        customServe(req, res);
-
+    private void extractPathParams(String pattern, String actualPath, HttpServletRequest req) {
+        String[] patternParts = pattern.split("/");
+        String[] pathParts = actualPath.split("/");
+        
+        for (int i = 0; i < patternParts.length && i < pathParts.length; i++) {
+            if (patternParts[i].startsWith("{") && patternParts[i].endsWith("}")) {
+                String paramName = patternParts[i].substring(1, patternParts[i].length() - 1);
+                String paramValue = pathParts[i];
+                req.setAttribute(paramName, paramValue);
+            }
+        }
     }
 
     private void customServe(HttpServletRequest req, HttpServletResponse res) throws IOException {
@@ -94,112 +178,76 @@ public class FrontServlet extends HttpServlet {
         }
     }
 
-    // nouvelle méthode extrait le comportement d'affichage + invocation
     private boolean handleMappedMethod(HttpServletRequest req, HttpServletResponse res, Method m) throws IOException {
         Class<?> cls = m.getDeclaringClass();
 
         try {
-            Object target = Modifier.isStatic(m.getModifiers()) ? null : cls.getDeclaredConstructor().newInstance();
-            m.setAccessible(true);
-
-            Class<?>[] params = m.getParameterTypes();
-            Object result = null;
-
-            if (params.length == 0) {
-                result = m.invoke(target);
-            } else if (params.length == 1 && HttpServletRequest.class.isAssignableFrom(params[0])) {
-                result = m.invoke(target, req);
-            } else if (params.length == 2
-                    && HttpServletRequest.class.isAssignableFrom(params[0])
-                    && HttpServletResponse.class.isAssignableFrom(params[1])) {
-                result = m.invoke(target, req, res);
-            } else {
-                // Appel de invokeMethod pour gérer les paramètres annotés avec @Param
-                result = invokeMethod(m, req, target);
-            }
-
-            // si ModelView -> forward directement (SANS écrire avant)
-            if (result instanceof ModelView) {
-                handleModelView(req, res, (ModelView) result);
-                return true;
-            }
-
-            // sinon on écrit du texte
-            try (PrintWriter out = res.getWriter()) {
-                res.setContentType("text/plain;charset=UTF-8");
-                if (!cls.isAnnotationPresent(framework.annotations.Controller.class)) {
-                    out.printf("classe non annote controller : %s%n", cls.getName());
-                } else {
-                    out.printf("Classe associe : %s%n", cls.getName());
-                    out.printf("Nom de la methode: %s%n", m.getName());
-                    handleReturnValue(out, req, res, m, result);
-                }
-            }
-
+            Object result = invokeMethod(m, req, cls.getDeclaredConstructor().newInstance());
+            handleReturnValue(res.getWriter(), req, res, m, result);
         } catch (InvocationTargetException ite) {
-            try (PrintWriter out = res.getWriter()) {
-                res.setContentType("text/plain;charset=UTF-8");
-                out.println("Erreur invocation: " + ite.getTargetException());
-            }
-            res.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            res.setContentType("text/plain;charset=UTF-8");
+            res.getWriter().println("Erreur invocation: " + ite.getTargetException());
+            return false;
         } catch (Exception ex) {
-            try (PrintWriter out = res.getWriter()) {
-                res.setContentType("text/plain;charset=UTF-8");
-                out.println("Erreur invocation: " + ex.toString());
-            }
-            res.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            res.setContentType("text/plain;charset=UTF-8");
+            res.getWriter().println("Erreur invocation: " + ex.toString());
+            return false;
         }
         return true;
     }
 
-    // nouvelle fonction pour gérer le retour de la méthode
-    private void handleReturnValue(PrintWriter out, HttpServletRequest req, HttpServletResponse res, Method m,
-            Object result) throws ServletException, IOException {
+    private void handleReturnValue(PrintWriter out, HttpServletRequest req, HttpServletResponse res, Method m, Object result) 
+            throws ServletException, IOException {
         
         Class<?> returnType = m.getReturnType();
         
-        // Si String
-        if (result instanceof String) {
-            out.printf("Methode string invoquee : %s", (String) result);
+        if (result instanceof ModelView) {
+            handleModelView(req, res, (ModelView) result);
             return;
         }
         
-        // Si int, double, float, boolean, etc.
-        if (result != null) {
-            out.println(result.toString());
-            return;
-        }
+        res.setContentType("text/plain;charset=UTF-8");
+        Class<?> cls = m.getDeclaringClass();
         
-        // Si null
-        out.println("Retour null");
+        if (!cls.isAnnotationPresent(Controller.class)) {
+            out.printf("Classe non annotée @Controller : %s%n", cls.getName());
+        } else {
+            out.printf("Classe associée : %s%n", cls.getName());
+            out.printf("Nom de la méthode: %s%n", m.getName());
+            
+            if (result instanceof String) {
+                out.printf("Méthode string invoquée : %s", result);
+            } else if (result != null) {
+                out.println(result.toString());
+            } else {
+                out.println("Retour null");
+            }
+        }
     }
 
     private void handleModelView(HttpServletRequest req, HttpServletResponse res, ModelView mv)
             throws ServletException, IOException {
         if (mv == null) {
             res.setContentType("text/plain;charset=UTF-8");
-            res.getWriter().println("ModelView est null");
+            res.getWriter().println("ModelView null");
             return;
         }
 
         String view = mv.getView();
         if (view == null || view.isEmpty()) {
             res.setContentType("text/plain;charset=UTF-8");
-            res.getWriter().println("ModelView.view est null ou vide");
+            res.getWriter().println("Vue invalide dans ModelView");
             return;
         }
 
-        // Ajout des données du ModelView dans la requête
         if (mv.getData() != null) {
-            for (String key : mv.getData().keySet()) {
-                req.setAttribute(key, mv.getData().get(key));
-            }
+            mv.getData().forEach(req::setAttribute);
         }
 
         RequestDispatcher rd = req.getRequestDispatcher(view);
         if (rd == null) {
             res.setContentType("text/plain;charset=UTF-8");
-            res.getWriter().println("Impossible d'obtenir RequestDispatcher pour la vue: " + view);
+            res.getWriter().println("RequestDispatcher introuvable pour: " + view);
             return;
         }
 
@@ -212,89 +260,37 @@ public class FrontServlet extends HttpServlet {
         Object[] args = new Object[paramTypes.length];
 
         for (int i = 0; i < paramTypes.length; i++) {
-            String paramName = params[i].getName(); // nécessite -parameters à la compilation
-            String value = req.getParameter(paramName);
-            Class<?> t = paramTypes[i];
+            Param paramAnnotation = params[i].getAnnotation(Param.class);
+            String paramName = (paramAnnotation != null) ? paramAnnotation.value() : params[i].getName();
 
-            args[i] = ParamConverter.convert(value, t);
+            String paramValue = req.getParameter(paramName);
+            if (paramValue == null) {
+                Object attr = req.getAttribute(paramName);
+                if (attr != null) paramValue = String.valueOf(attr);
+            }
+
+            if (paramValue != null && !paramValue.isEmpty()) {
+                args[i] = ParamConverter.convert(paramValue, paramTypes[i]);
+            } else {
+                args[i] = null;
+            }
         }
         return args;
     }
-    
-    private UrlMapping findUrlMapping(String path, HttpServletRequest req) {
-        for (UrlMapping mapping : scanResult.urlMappings) {
-            String urlPattern = mapping.getUrl();
-            if (!urlPattern.startsWith("/")) {
-                urlPattern = "/" + urlPattern;
-            }
-            // Si le pattern contient {param}
-            if (urlPattern.contains("{")) {
-                // Convertir le pattern en regex
-                String regex = urlPattern.replaceAll("\\{[^/]+\\}", "([^/]+)");
-                if (path.matches(regex)) {
-                    // Extraire le paramètre
-                    String[] patternParts = urlPattern.split("/");
-                    String[] pathParts = path.split("/");
-                    for (int i = 0; i < patternParts.length; i++) {
-                        if (patternParts[i].startsWith("{") && patternParts[i].endsWith("}")) {
-                            String paramName = patternParts[i].substring(1, patternParts[i].length() - 1);
-                            req.setAttribute(paramName, pathParts[i]);
-                        }
-                    }
-                    return mapping;
-                }
-            } else if (urlPattern.equals(path)) {
-                return mapping;
-            }
-        }
-        return null;
-    }
 
-    private Object invokeMethod(Method method, HttpServletRequest request, Object controllerInstance) throws Exception {
-        java.lang.reflect.Parameter[] parameters = method.getParameters();
-        Object[] args = new Object[parameters.length];
-        
-        for (int i = 0; i < parameters.length; i++) {
-            java.lang.reflect.Parameter param = parameters[i];
-            Param paramAnnotation = param.getAnnotation(Param.class);
-            
-            if (paramAnnotation != null) {
-                // Gestion de @Param
-                String paramName = paramAnnotation.value();
-                String paramValue = request.getParameter(paramName);
-                
-                if (paramValue == null) {
-                    Object attr = request.getAttribute(paramName);
-                    if (attr != null) paramValue = String.valueOf(attr);
-                }
-                
-                if (paramValue != null && !paramValue.isEmpty()) {
-                    Class<?> paramType = param.getType();
-                    args[i] = ParamConverter.convert(paramValue, paramType);
-                } else {
-                    args[i] = null;
-                }
-            } else {
-                // Pas d'annotation @Param : chercher automatiquement par le nom du paramètre
-                String paramName = param.getName();
-                String paramValue = request.getParameter(paramName);
-                
-                // Si pas en paramètre de requête, chercher dans les attributs (variables de chemin)
-                if (paramValue == null) {
-                    Object attr = request.getAttribute(paramName);
-                    if (attr != null) paramValue = String.valueOf(attr);
-                }
-                
-                if (paramValue != null && !paramValue.isEmpty()) {
-                    Class<?> paramType = param.getType();
-                    args[i] = ParamConverter.convert(paramValue, paramType);
-                } else {
-                    args[i] = null;
-                }
-            }
+    private Object invokeMethod(Method method, HttpServletRequest req, Object controllerInstance) throws Exception {
+        method.setAccessible(true);
+        Class<?>[] paramTypes = method.getParameterTypes();
+
+        if (paramTypes.length == 0) {
+            return method.invoke(controllerInstance);
         }
-        
+
+        if (paramTypes.length == 1 && HttpServletRequest.class.isAssignableFrom(paramTypes[0])) {
+            return method.invoke(controllerInstance, req);
+        }
+
+        Object[] args = buildMethodArgs(req, method);
         return method.invoke(controllerInstance, args);
     }
-
 }

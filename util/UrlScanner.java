@@ -4,12 +4,15 @@ import jakarta.servlet.ServletContext;
 import java.io.File;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 import framework.annotations.Controller;
 import framework.annotations.Url;
+import framework.annotations.GetMapping;
+import framework.annotations.PostMapping;
 
 public class UrlScanner {
     public static class ScanResult {
@@ -30,17 +33,30 @@ public class UrlScanner {
         return result;
     }
 
-    // Nouvelle fonction : vérifie si un pattern contient des paramètres
+    // MÉTHODE PRIVÉE : getAllUrl() comme sur l'image
+    public static HashMap<String, List<ActionMapping>> getAllUrl(ServletContext ctx) throws Exception {
+        HashMap<String, List<ActionMapping>> result = new HashMap<>();
+        
+        if (ctx == null) return result;
+
+        String classesPath = ctx.getRealPath("/WEB-INF/classes");
+        if (classesPath == null) return result;
+
+        File root = new File(classesPath);
+        if (!root.exists() || !root.isDirectory()) return result;
+
+        scanDirForActionMapping(root, root, ctx.getClassLoader(), result);
+        return result;
+    }
+
     private static boolean hasPathParam(String urlPattern) {
         return urlPattern != null && urlPattern.matches(".*\\{[^/]+\\}.*");
     }
 
-    // Nouvelle fonction : convertit un pattern en regex
     private static String patternToRegex(String urlPattern) {
         return urlPattern.replaceAll("\\{[^/]+\\}", "[^/]+");
     }
 
-    // Nouvelle fonction : extrait les noms de paramètres du pattern
     private static List<String> extractParamNames(String urlPattern) {
         List<String> params = new ArrayList<>();
         String[] parts = urlPattern.split("/");
@@ -61,39 +77,52 @@ public class UrlScanner {
                 scanDir(root, f, loader, result);
             } else if (f.getName().endsWith(".class")) {
                 String rel = root.toURI().relativize(f.toURI()).getPath();
-                if (rel.contains("$")) continue; // ignore inner / anonymous classes
+                if (rel.contains("$")) continue;
                 String fqcn = rel.replace('/', '.').replace('\\', '.');
                 fqcn = fqcn.substring(0, fqcn.length() - ".class".length());
                 try {
                     Class<?> cls = loader.loadClass(fqcn);
+
+                    //AJOUTER CETTE LIGNE (comme dans scanDirForActionMapping)
+                    if (!cls.isAnnotationPresent(Controller.class)) continue;
 
                     String base = deriveControllerBase(cls);
                     Set<String> seen = new HashSet<>();
 
                     for (Method m : cls.getDeclaredMethods()) {
                         String path = null;
+                        String httpMethod = "ANY";
 
                         if (m.isAnnotationPresent(Url.class)) {
                             Url u = m.getAnnotation(Url.class);
                             path = u.value();
-                        } else if (cls.isAnnotationPresent(framework.annotations.Controller.class)) {
+                            httpMethod = "ANY";
+                        } else if (m.isAnnotationPresent(GetMapping.class)) {
+                            GetMapping u = m.getAnnotation(GetMapping.class);
+                            path = u.value();
+                            httpMethod = "GET";
+                        } else if (m.isAnnotationPresent(PostMapping.class)) {
+                            PostMapping u = m.getAnnotation(PostMapping.class);
+                            path = u.value();
+                            httpMethod = "POST";
+                        } else if (cls.isAnnotationPresent(Controller.class)) {
                             String action = m.getName();
                             if ("index".equals(action)) {
                                 path = base;
                             } else {
                                 path = base.endsWith("/") ? base + action : base + "/" + action;
                             }
+                            httpMethod = "ANY";
                         }
 
                         if (path == null) continue;
                         if (!path.startsWith("/")) path = "/" + path;
                         path = path.toLowerCase();
 
-                        // éviter doublons
-                        if (seen.contains(path)) continue;
-                        seen.add(path);
+                        String mappingKey = httpMethod + ":" + path;
+                        if (seen.contains(mappingKey)) continue;
+                        seen.add(mappingKey);
 
-                        // Ajout du mapping, enregistre aussi le regex et les noms de paramètres si besoin
                         UrlMapping mapping = new UrlMapping(path, m);
                         if (hasPathParam(path)) {
                             mapping.setRegex(patternToRegex(path));
@@ -103,17 +132,86 @@ public class UrlScanner {
                     }
 
                 } catch (ClassNotFoundException | NoClassDefFoundError e) {
-                    // ignore classes non disponibles au runtime
+                    // ignore
+                }
+            }
+        }
+    }
+
+    // MÉTHODE PRIVÉE pour scanner et créer ActionMapping
+    private static void scanDirForActionMapping(File root, File current, ClassLoader loader, 
+                                                 HashMap<String, List<ActionMapping>> result) {
+        File[] children = current.listFiles();
+        if (children == null) return;
+
+        for (File f : children) {
+            if (f.isDirectory()) {
+                scanDirForActionMapping(root, f, loader, result);
+            } else if (f.getName().endsWith(".class")) {
+                String rel = root.toURI().relativize(f.toURI()).getPath();
+                if (rel.contains("$")) continue;
+                String fqcn = rel.replace('/', '.').replace('\\', '.');
+                fqcn = fqcn.substring(0, fqcn.length() - ".class".length());
+                try {
+                    Class<?> cls = loader.loadClass(fqcn);
+
+                    if (!cls.isAnnotationPresent(Controller.class)) continue;
+
+                    String base = deriveControllerBase(cls);
+
+                    for (Method m : cls.getDeclaredMethods()) {
+                        String path = null;
+                        String httpMethod = "ALL";
+
+                        if (m.isAnnotationPresent(Url.class)) {
+                            Url u = m.getAnnotation(Url.class);
+                            path = u.value();
+                            httpMethod = "ALL";
+                        } else if (m.isAnnotationPresent(GetMapping.class)) {
+                            GetMapping u = m.getAnnotation(GetMapping.class);
+                            path = u.value();
+                            httpMethod = "GET";
+                        } else if (m.isAnnotationPresent(PostMapping.class)) {
+                            PostMapping u = m.getAnnotation(PostMapping.class);
+                            path = u.value();
+                            httpMethod = "POST";
+                        } else if (cls.isAnnotationPresent(Controller.class)) {
+                            String action = m.getName();
+                            if ("index".equals(action)) {
+                                path = base;
+                            } else {
+                                path = base.endsWith("/") ? base + action : base + "/" + action;
+                            }
+                            httpMethod = "ALL";
+                        }
+
+                        if (path == null) continue;
+                        if (!path.startsWith("/")) path = "/" + path;
+                        
+                        // normaliser en lowercase (comme dans scanDir)
+                        path = path.toLowerCase();
+
+                        // Créer ActionMapping
+                        ActionMapping am = new ActionMapping(cls.getName(), m, httpMethod);
+                        
+                        // Ajouter à la liste correspondante
+                        List<ActionMapping> list = result.getOrDefault(path, new ArrayList<>());
+                        list.add(am);
+                        result.put(path, list);
+                    }
+
+                } catch (ClassNotFoundException | NoClassDefFoundError e) {
+                    // ignore
                 }
             }
         }
     }
 
     private static String deriveControllerBase(Class<?> cls) {
-        String name = cls.getSimpleName();
-        if (name.endsWith("Controller")) {
-            name = name.substring(0, name.length() - "Controller".length());
+        String simpleName = cls.getSimpleName();
+        if (simpleName.toLowerCase().endsWith("controller")) {
+            simpleName = simpleName.substring(0, simpleName.length() - "controller".length());
         }
-        return "/" + name.toLowerCase();
+        return "/" + simpleName.toLowerCase();
     }
 }
