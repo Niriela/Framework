@@ -13,7 +13,6 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.List;
 import framework.util.*;
-import framework.util.ParamConverter;
 import framework.views.ModelView; // added import
 import framework.annotations.*;; // added import
 
@@ -42,24 +41,28 @@ public class FrontServlet extends HttpServlet {
     }
 
     @Override
-    protected void service(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
-        String path = req.getRequestURI().substring(req.getContextPath().length()).toLowerCase();
+    protected void doGet(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
+        handleRequest(req, res);
+    }
 
-        // Vérifier si la ressource existe
-        boolean ressources = getServletContext().getResource(path) != null;
+    @Override
+    protected void doPost(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
+        handleRequest(req, res);
+    }
 
-        // Si c'est la racine, afficher un message personnalisé
-        if ("/".equals(path)) {
-            res.setContentType("text/html");
-            try (PrintWriter out = res.getWriter()) {
-                out.println("<ml><body>");
-                out.println("<h1>Path: /</h1>");
-                out.println("</body></html>");
-            }
-            return;
-        } else if (ressources) {
-            // Si c'est une ressource statique existante, la servir avec le default
-            // dispatcher
+    private void handleRequest(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
+        // Normaliser le path (enlever contextPath)
+        String fullUri = req.getRequestURI();
+        String context = req.getContextPath();
+        String matchPath = fullUri.startsWith(context) ? fullUri.substring(context.length()) : fullUri;
+        if (matchPath.isEmpty()) matchPath = "/";
+        if (matchPath.length() > 1 && matchPath.endsWith("/")) matchPath = matchPath.substring(0, matchPath.length() - 1);
+
+        System.out.println("handleRequest: fullUri=" + fullUri + " context=" + context + " -> matchPath=" + matchPath + " method=" + req.getMethod());
+
+        // Vérifier si c'est une ressource statique
+        boolean ressources = getServletContext().getResource(matchPath) != null;
+        if (ressources) {
             RequestDispatcher rd = getServletContext().getNamedDispatcher("default");
             if (rd != null) {
                 rd.forward(req, res);
@@ -67,21 +70,16 @@ public class FrontServlet extends HttpServlet {
             }
         }
 
-        // Chercher un contrôleur pour cette URL
-        Method m = null;
-        UrlMapping matchedMapping = findUrlMapping(path, req);
-        if (matchedMapping != null) {
-            m = matchedMapping.getMethod();
-        }
+        // Chercher le mapping avec le path normalisé
+        UrlMapping matchedMapping = findUrlMapping(matchPath, req);
 
-        if (m != null) {
-            if (handleMappedMethod(req, res, m))
+        if (matchedMapping != null) {
+            if (handleMappedMethod(req, res, matchedMapping.getMethod()))
                 return;
         }
 
-        // Si rien ne correspond, afficher un message personnalisé
+        // Fallback si rien ne correspond
         customServe(req, res);
-
     }
 
     private void customServe(HttpServletRequest req, HttpServletResponse res) throws IOException {
@@ -222,32 +220,113 @@ public class FrontServlet extends HttpServlet {
     }
     
     private UrlMapping findUrlMapping(String path, HttpServletRequest req) {
+        String httpMethod = req.getMethod();
+        String normPath = path.toLowerCase();
+        
+        System.out.println("=== RECHERCHE MAPPING ===");
+        System.out.println("Path demandé: " + path + " (normalisé: " + normPath + ")");
+        System.out.println("Méthode HTTP: " + httpMethod);
+        System.out.println("Nombre de mappings disponibles: " + scanResult.urlMappings.size());
+
+        // 1) exact Get/Post (non dyn)
+        System.out.println("\n--- Étape 1: URLs exactes GetMapping/PostMapping ---");
         for (UrlMapping mapping : scanResult.urlMappings) {
             String urlPattern = mapping.getUrl();
-            if (!urlPattern.startsWith("/")) {
-                urlPattern = "/" + urlPattern;
-            }
-            // Si le pattern contient {param}
-            if (urlPattern.contains("{")) {
-                // Convertir le pattern en regex
-                String regex = urlPattern.replaceAll("\\{[^/]+\\}", "([^/]+)");
-                if (path.matches(regex)) {
-                    // Extraire le paramètre
-                    String[] patternParts = urlPattern.split("/");
-                    String[] pathParts = path.split("/");
-                    for (int i = 0; i < patternParts.length; i++) {
-                        if (patternParts[i].startsWith("{") && patternParts[i].endsWith("}")) {
-                            String paramName = patternParts[i].substring(1, patternParts[i].length() - 1);
-                            req.setAttribute(paramName, pathParts[i]);
-                        }
-                    }
+            if (!urlPattern.startsWith("/")) urlPattern = "/" + urlPattern;
+            String normPattern = urlPattern.toLowerCase();
+            Method m = mapping.getMethod();
+
+            if (!normPattern.contains("{") && normPattern.equals(normPath)) {
+                if ("GET".equals(httpMethod) && m.isAnnotationPresent(GetMapping.class)) {
+                    System.out.println("  ✓✓ TROUVÉ GetMapping exact!");
                     return mapping;
                 }
-            } else if (urlPattern.equals(path)) {
+                if ("POST".equals(httpMethod) && m.isAnnotationPresent(PostMapping.class)) {
+                    System.out.println("  ✓✓ TROUVÉ PostMapping exact!");
+                    return mapping;
+                }
+            }
+        }
+
+        // 2) dyn Get/Post (patterns with {param})
+        System.out.println("\n--- Étape 2: URLs dynamiques GetMapping/PostMapping ---");
+        for (UrlMapping mapping : scanResult.urlMappings) {
+            String urlPattern = mapping.getUrl();
+            if (!urlPattern.startsWith("/")) urlPattern = "/" + urlPattern;
+            String normPattern = urlPattern.toLowerCase();
+            Method m = mapping.getMethod();
+
+            if (normPattern.contains("{")) {
+                String regex = normPattern.replaceAll("\\{[^/]+\\}", "([^/]+)");
+                if (normPath.matches(regex)) {
+                    //  EXTRAIRE LES PARAMÈTRES ICI
+                    extractPathParams(urlPattern, path, req);
+                    
+                    if ("GET".equals(httpMethod) && m.isAnnotationPresent(GetMapping.class)) {
+                        System.out.println("  ✓✓ TROUVÉ GetMapping dynamique!");
+                        return mapping;
+                    }
+                    if ("POST".equals(httpMethod) && m.isAnnotationPresent(PostMapping.class)) {
+                        System.out.println("  ✓✓ TROUVÉ PostMapping dynamique!");
+                        return mapping;
+                    }
+                }
+            }
+        }
+
+        // 3) exact @Url fallback
+        System.out.println("\n--- Étape 3: URLs exactes @Url ---");
+        for (UrlMapping mapping : scanResult.urlMappings) {
+            String urlPattern = mapping.getUrl();
+            if (!urlPattern.startsWith("/")) urlPattern = "/" + urlPattern;
+            String normPattern = urlPattern.toLowerCase();
+            Method m = mapping.getMethod();
+
+            if (!normPattern.contains("{") && normPattern.equals(normPath) && m.isAnnotationPresent(Url.class)) {
+                System.out.println("  ✓✓ TROUVÉ @Url exact!");
                 return mapping;
             }
         }
+
+        // 4) dyn @Url fallback
+        System.out.println("\n--- Étape 4: URLs dynamiques @Url ---");
+        for (UrlMapping mapping : scanResult.urlMappings) {
+            String urlPattern = mapping.getUrl();
+            if (!urlPattern.startsWith("/")) urlPattern = "/" + urlPattern;
+            String normPattern = urlPattern.toLowerCase();
+            Method m = mapping.getMethod();
+
+            if (normPattern.contains("{") && m.isAnnotationPresent(Url.class)) {
+                String regex = normPattern.replaceAll("\\{[^/]+\\}", "([^/]+)");
+                System.out.println("Test @Url dynamique: " + urlPattern + " regex=" + regex);
+                if (normPath.matches(regex)) {
+                    // EXTRAIRE LES PARAMÈTRES ICI AUSSI
+                    extractPathParams(urlPattern, path, req);
+                    System.out.println("  ✓✓ TROUVÉ @Url dynamique!");
+                    return mapping;
+                }
+            }
+        }
+
+        System.out.println("AUCUN MAPPING TROUVÉ\n");
         return null;
+    }
+
+    // NOUVELLE MÉTHODE pour extraire les paramètres
+    private void extractPathParams(String pattern, String actualPath, HttpServletRequest req) {
+        String[] patternParts = pattern.split("/");
+        String[] pathParts = actualPath.split("/");
+        
+        System.out.println("  Extraction params: pattern=" + pattern + " actualPath=" + actualPath);
+        
+        for (int i = 0; i < patternParts.length && i < pathParts.length; i++) {
+            if (patternParts[i].startsWith("{") && patternParts[i].endsWith("}")) {
+                String paramName = patternParts[i].substring(1, patternParts[i].length() - 1);
+                String paramValue = pathParts[i];
+                System.out.println("    -> Param extrait: " + paramName + " = " + paramValue);
+                req.setAttribute(paramName, paramValue);
+            }
+        }
     }
 
     private Object invokeMethod(Method method, HttpServletRequest request, Object controllerInstance) throws Exception {

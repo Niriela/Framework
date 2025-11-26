@@ -10,6 +10,8 @@ import java.util.Set;
 
 import framework.annotations.Controller;
 import framework.annotations.Url;
+import framework.annotations.GetMapping;
+import framework.annotations.PostMapping;
 
 public class UrlScanner {
     public static class ScanResult {
@@ -61,7 +63,7 @@ public class UrlScanner {
                 scanDir(root, f, loader, result);
             } else if (f.getName().endsWith(".class")) {
                 String rel = root.toURI().relativize(f.toURI()).getPath();
-                if (rel.contains("$")) continue; // ignore inner / anonymous classes
+                if (rel.contains("$")) continue;
                 String fqcn = rel.replace('/', '.').replace('\\', '.');
                 fqcn = fqcn.substring(0, fqcn.length() - ".class".length());
                 try {
@@ -72,10 +74,20 @@ public class UrlScanner {
 
                     for (Method m : cls.getDeclaredMethods()) {
                         String path = null;
+                        String httpMethod = "ANY"; // par défaut
 
                         if (m.isAnnotationPresent(Url.class)) {
                             Url u = m.getAnnotation(Url.class);
                             path = u.value();
+                            httpMethod = "ANY";
+                        } else if (m.isAnnotationPresent(GetMapping.class)) {
+                            GetMapping u = m.getAnnotation(GetMapping.class);
+                            path = u.value();
+                            httpMethod = "GET";
+                        } else if (m.isAnnotationPresent(PostMapping.class)) {
+                            PostMapping u = m.getAnnotation(PostMapping.class);
+                            path = u.value();
+                            httpMethod = "POST";
                         } else if (cls.isAnnotationPresent(framework.annotations.Controller.class)) {
                             String action = m.getName();
                             if ("index".equals(action)) {
@@ -83,17 +95,17 @@ public class UrlScanner {
                             } else {
                                 path = base.endsWith("/") ? base + action : base + "/" + action;
                             }
+                            httpMethod = "ANY";
                         }
 
                         if (path == null) continue;
                         if (!path.startsWith("/")) path = "/" + path;
                         path = path.toLowerCase();
 
-                        // éviter doublons
-                        if (seen.contains(path)) continue;
-                        seen.add(path);
+                        String mappingKey = httpMethod + ":" + path;
+                        if (seen.contains(mappingKey)) continue;
+                        seen.add(mappingKey);
 
-                        // Ajout du mapping, enregistre aussi le regex et les noms de paramètres si besoin
                         UrlMapping mapping = new UrlMapping(path, m);
                         if (hasPathParam(path)) {
                             mapping.setRegex(patternToRegex(path));
@@ -103,7 +115,7 @@ public class UrlScanner {
                     }
 
                 } catch (ClassNotFoundException | NoClassDefFoundError e) {
-                    // ignore classes non disponibles au runtime
+                    // ignore
                 }
             }
         }
