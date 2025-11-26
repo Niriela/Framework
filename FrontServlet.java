@@ -11,26 +11,52 @@ import java.io.PrintWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.HashMap;
+import java.util.List;
+
 import framework.util.*;
 import framework.views.ModelView;
 import framework.annotations.*;
 
 public class FrontServlet extends HttpServlet {
     private UrlScanner.ScanResult scanResult = new UrlScanner.ScanResult();
+    // HashMap pour ActionMapping
+    private HashMap<String, List<ActionMapping>> actionMappings = new HashMap<>();
 
     @Override
     public void init() {
         try {
+            // Ancien système (pour compatibilité)
             scanResult = UrlScanner.scan(getServletContext());
+            
+            //  : Utiliser getAllUrl()
+            actionMappings = UrlScanner.getAllUrl(getServletContext());
+            
             getServletContext().setAttribute("controllerMappings", scanResult.urlMappings);
 
+            // Debug
+            System.out.println("=== UrlMapping (ancien) ===");
             for (UrlMapping cm : scanResult.urlMappings) {
                 System.out.println("Mapped URL: " + cm.getUrl() + " -> " +
                         cm.getMethod().getDeclaringClass().getName() + "#" + cm.getMethod().getName());
             }
+            
+            // ActionMapping (nouveau)
+            System.out.println("\n=== ActionMapping (nouveau) ===");
+            for (String url : actionMappings.keySet()) {
+                List<ActionMapping> list = actionMappings.get(url);
+                for (ActionMapping am : list) {
+                    System.out.println("Mapped URL: " + url + " -> " + 
+                            am.getTheClassName() + "#" + am.getTheMethod().getName() + 
+                            " [" + am.getHttpMethod() + "]");
+                }
+            }
+            
         } catch (Exception ex) {
             scanResult = new UrlScanner.ScanResult();
-            System.err.println("ControllerScanner init error: " + ex.getMessage());
+            actionMappings = new HashMap<>();
+            System.err.println("Scanner init error: " + ex.getMessage());
+            ex.printStackTrace();
         }
     }
 
@@ -63,13 +89,82 @@ public class FrontServlet extends HttpServlet {
             return;
         }
 
-        //  Utiliser UrlMatcher au lieu de findUrlMapping
-        UrlMapping matchedMapping = UrlMatcher.findMapping(matchPath, req.getMethod(), scanResult.urlMappings, req);
+        // Essayer d'abord avec ActionMapping (nouveau système)
+        ActionMapping actionMapping = findActionMapping(matchPath, req.getMethod(), req);
+        if (actionMapping != null) {
+            handleActionMapping(req, res, actionMapping);
+            return;
+        }
 
+        // Fallback : utiliser UrlMatcher (ancien système)
+        UrlMapping matchedMapping = UrlMatcher.findMapping(matchPath, req.getMethod(), scanResult.urlMappings, req);
         if (matchedMapping != null) {
             handleMappedMethod(req, res, matchedMapping.getMethod());
         } else {
             customServe(req, res);
+        }
+    }
+
+    //  MÉTHODE : Trouver ActionMapping
+    private ActionMapping findActionMapping(String path, String httpMethod, HttpServletRequest req) {
+        System.out.println("=== RECHERCHE ACTION MAPPING ===");
+        
+        // 1) Correspondance exacte
+        if (actionMappings.containsKey(path)) {
+            List<ActionMapping> list = actionMappings.get(path);
+            for (ActionMapping am : list) {
+                if ("ALL".equals(am.getHttpMethod()) || httpMethod.equals(am.getHttpMethod())) {
+                    System.out.println("  ✓✓ TROUVÉ ActionMapping exact : " + path);
+                    return am;
+                }
+            }
+        }
+        
+        // 2) Correspondance dynamique avec {param}
+        for (String pattern : actionMappings.keySet()) {
+            if (pattern.contains("{")) {
+                String regex = pattern.replaceAll("\\{[^/]+\\}", "([^/]+)");
+                if (path.toLowerCase().matches(regex.toLowerCase())) {
+                    extractPathParams(pattern, path, req);
+                    List<ActionMapping> list = actionMappings.get(pattern);
+                    for (ActionMapping am : list) {
+                        if ("ALL".equals(am.getHttpMethod()) || httpMethod.equals(am.getHttpMethod())) {
+                            System.out.println("  ✓✓ TROUVÉ ActionMapping dynamique : " + pattern);
+                            return am;
+                        }
+                    }
+                }
+            }
+        }
+        
+        System.out.println(" Aucun ActionMapping trouvé");
+        return null;
+    }
+
+    //  MÉTHODE : Gérer ActionMapping
+    private void handleActionMapping(HttpServletRequest req, HttpServletResponse res, ActionMapping am) throws IOException {
+        try {
+            Class<?> controllerClass = Class.forName(am.getTheClassName());
+            Object controller = controllerClass.getDeclaredConstructor().newInstance();
+            Object result = invokeMethod(am.getTheMethod(), req, controller);
+            handleReturnValue(res.getWriter(), req, res, am.getTheMethod(), result);
+        } catch (Exception ex) {
+            res.setContentType("text/plain;charset=UTF-8");
+            res.getWriter().println("Erreur invocation ActionMapping: " + ex.toString());
+            ex.printStackTrace();
+        }
+    }
+
+    private void extractPathParams(String pattern, String actualPath, HttpServletRequest req) {
+        String[] patternParts = pattern.split("/");
+        String[] pathParts = actualPath.split("/");
+        
+        for (int i = 0; i < patternParts.length && i < pathParts.length; i++) {
+            if (patternParts[i].startsWith("{") && patternParts[i].endsWith("}")) {
+                String paramName = patternParts[i].substring(1, patternParts[i].length() - 1);
+                String paramValue = pathParts[i];
+                req.setAttribute(paramName, paramValue);
+            }
         }
     }
 
