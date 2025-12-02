@@ -13,6 +13,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import framework.util.*;
 import framework.views.ModelView;
@@ -263,19 +264,46 @@ public class FrontServlet extends HttpServlet {
             Param paramAnnotation = params[i].getAnnotation(Param.class);
             String paramName = (paramAnnotation != null) ? paramAnnotation.value() : params[i].getName();
 
-            String paramValue = req.getParameter(paramName);
-            if (paramValue == null) {
-                Object attr = req.getAttribute(paramName);
-                if (attr != null) paramValue = String.valueOf(attr);
-            }
-
-            if (paramValue != null && !paramValue.isEmpty()) {
-                args[i] = ParamConverter.convert(paramValue, paramTypes[i]);
+            // Vérifier si le paramètre est une Map<String, Object>
+            if (paramTypes[i].equals(java.util.Map.class)) {
+                args[i] = convertParametersToMap(req);
             } else {
-                args[i] = null;
+                String paramValue = req.getParameter(paramName);
+                if (paramValue == null) {
+                    Object attr = req.getAttribute(paramName);
+                    if (attr != null) paramValue = String.valueOf(attr);
+                }
+
+                if (paramValue != null && !paramValue.isEmpty()) {
+                    args[i] = ParamConverter.convert(paramValue, paramTypes[i]);
+                } else {
+                    args[i] = null;
+                }
             }
         }
         return args;
+    }
+
+    // Nouvelle méthode pour convertir les paramètres en Map<String, Object>
+    private Map<String, Object> convertParametersToMap(HttpServletRequest req) {
+        Map<String, Object> resultMap = new HashMap<>();
+        Map<String, String[]> parameterMap = req.getParameterMap();
+        
+        for (String key : parameterMap.keySet()) {
+            String[] values = parameterMap.get(key);
+            // Si un seul paramètre, ajouter la valeur directement
+            // Sinon, ajouter le tableau
+            if (values.length == 1) {
+                resultMap.put(key, values[0]);
+            } else {
+                resultMap.put(key, values);
+            }
+        }
+        
+        System.out.println("=== Map des paramètres ===");
+        resultMap.forEach((key, value) -> System.out.println(key + " -> " + value));
+        
+        return resultMap;
     }
 
     private Object invokeMethod(Method method, HttpServletRequest req, Object controllerInstance) throws Exception {
