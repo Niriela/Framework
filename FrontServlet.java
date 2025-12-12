@@ -99,9 +99,12 @@ public class FrontServlet extends HttpServlet {
 
         // Fallback : utiliser UrlMatcher (ancien système)
         UrlMapping matchedMapping = UrlMatcher.findMapping(matchPath, req.getMethod(), scanResult.urlMappings, req);
+        System.out.println("UrlMatcher retourne: " + (matchedMapping != null ? matchedMapping.getUrl() : "NULL"));
         if (matchedMapping != null) {
+            System.out.println("Appel handleMappedMethod...");
             handleMappedMethod(req, res, matchedMapping.getMethod());
         } else {
+            System.out.println("Pas de mapping trouvé, customServe...");
             customServe(req, res);
         }
     }
@@ -109,10 +112,12 @@ public class FrontServlet extends HttpServlet {
     //  MÉTHODE : Trouver ActionMapping
     private ActionMapping findActionMapping(String path, String httpMethod, HttpServletRequest req) {
         System.out.println("=== RECHERCHE ACTION MAPPING ===");
+
+        String normalizedPath = path.toLowerCase();
         
         // 1) Correspondance exacte
-        if (actionMappings.containsKey(path)) {
-            List<ActionMapping> list = actionMappings.get(path);
+        if (actionMappings.containsKey(normalizedPath)) {
+            List<ActionMapping> list = actionMappings.get(normalizedPath);
             for (ActionMapping am : list) {
                 if ("ALL".equals(am.getHttpMethod()) || httpMethod.equals(am.getHttpMethod())) {
                     System.out.println("  ✓✓ TROUVÉ ActionMapping exact : " + path);
@@ -125,7 +130,7 @@ public class FrontServlet extends HttpServlet {
         for (String pattern : actionMappings.keySet()) {
             if (pattern.contains("{")) {
                 String regex = pattern.replaceAll("\\{[^/]+\\}", "([^/]+)");
-                if (path.toLowerCase().matches(regex.toLowerCase())) {
+                if (normalizedPath.matches(regex.toLowerCase())) {
                     extractPathParams(pattern, path, req);
                     List<ActionMapping> list = actionMappings.get(pattern);
                     for (ActionMapping am : list) {
@@ -268,16 +273,28 @@ public class FrontServlet extends HttpServlet {
             if (paramTypes[i].equals(java.util.Map.class)) {
                 args[i] = convertParametersToMap(req);
             } else {
-                String paramValue = req.getParameter(paramName);
-                if (paramValue == null) {
-                    Object attr = req.getAttribute(paramName);
-                    if (attr != null) paramValue = String.valueOf(attr);
-                }
+                // Utiliser ObjectBinder pour les objets complexes avec notation pointée
+                Object bindedValue = ObjectBinder.bindParameters(
+                    new Class<?>[] { paramTypes[i] },
+                    new java.lang.reflect.Parameter[] { params[i] },
+                    req.getParameterMap()
+                )[0];
+                
+                // Si ObjectBinder retourne null, essayer la conversion classique
+                if (bindedValue == null) {
+                    String paramValue = req.getParameter(paramName);
+                    if (paramValue == null) {
+                        Object attr = req.getAttribute(paramName);
+                        if (attr != null) paramValue = String.valueOf(attr);
+                    }
 
-                if (paramValue != null && !paramValue.isEmpty()) {
-                    args[i] = ParamConverter.convert(paramValue, paramTypes[i]);
+                    if (paramValue != null && !paramValue.isEmpty()) {
+                        args[i] = ParamConverter.convert(paramValue, paramTypes[i]);
+                    } else {
+                        args[i] = null;
+                    }
                 } else {
-                    args[i] = null;
+                    args[i] = bindedValue;
                 }
             }
         }
