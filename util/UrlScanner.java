@@ -8,6 +8,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import framework.annotations.Controller;
 import framework.annotations.Url;
@@ -53,8 +55,28 @@ public class UrlScanner {
         return urlPattern != null && urlPattern.matches(".*\\{[^/]+\\}.*");
     }
 
+    private static final Pattern PARAM_PATTERN = Pattern.compile("\\{([^}]+)\\}");
+
     private static String patternToRegex(String urlPattern) {
-        return urlPattern.replaceAll("\\{[^/]+\\}", "[^/]+");
+        if (urlPattern == null) return null;
+
+        StringBuilder regex = new StringBuilder();
+        Matcher matcher = PARAM_PATTERN.matcher(urlPattern);
+        int lastEnd = 0;
+
+        while (matcher.find()) {
+            regex.append(urlPattern, lastEnd, matcher.start());
+
+            String spec = matcher.group(1);
+            String[] parts = spec.split(":", 2);
+            String partRegex = parts.length == 2 ? parts[1] : "[^/]+";
+            regex.append(partRegex);
+
+            lastEnd = matcher.end();
+        }
+
+        regex.append(urlPattern.substring(lastEnd));
+        return regex.toString();
     }
 
     private static List<String> extractParamNames(String urlPattern) {
@@ -62,7 +84,9 @@ public class UrlScanner {
         String[] parts = urlPattern.split("/");
         for (String part : parts) {
             if (part.startsWith("{") && part.endsWith("}")) {
-                params.add(part.substring(1, part.length() - 1));
+                String spec = part.substring(1, part.length() - 1);
+                int colonIndex = spec.indexOf(':');
+                params.add(colonIndex >= 0 ? spec.substring(0, colonIndex) : spec);
             }
         }
         return params;

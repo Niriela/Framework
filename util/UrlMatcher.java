@@ -4,6 +4,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import framework.annotations.*;
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class UrlMatcher {
     
@@ -49,6 +51,8 @@ public class UrlMatcher {
         return null;
     }
     
+    private static final Pattern PARAM_PATTERN = Pattern.compile("\\{([^}]+)\\}");
+
     private static UrlMapping findDynamicHttpMapping(String normPath, String httpMethod, List<UrlMapping> mappings, String path, HttpServletRequest req) {
         System.out.println("\n--- URLs dynamiques GetMapping/PostMapping ---");
         for (UrlMapping mapping : mappings) {
@@ -56,7 +60,7 @@ public class UrlMatcher {
             Method m = mapping.getMethod();
             
             if (pattern.contains("{")) {
-                String regex = pattern.replaceAll("\\{[^/]+\\}", "([^/]+)");
+                String regex = buildRegex(pattern);
                 if (normPath.matches(regex)) {
                     extractPathParams(mapping.getUrl(), path, req);
                     if (matchesHttpMethod(m, httpMethod)) {
@@ -90,7 +94,7 @@ public class UrlMatcher {
             Method m = mapping.getMethod();
             
             if (pattern.contains("{") && m.isAnnotationPresent(Url.class)) {
-                String regex = pattern.replaceAll("\\{[^/]+\\}", "([^/]+)");
+                String regex = buildRegex(pattern);
                 if (normPath.matches(regex)) {
                     extractPathParams(mapping.getUrl(), path, req);
                     System.out.println("  ✓✓ TROUVÉ!");
@@ -120,11 +124,33 @@ public class UrlMatcher {
         
         for (int i = 0; i < patternParts.length && i < pathParts.length; i++) {
             if (patternParts[i].startsWith("{") && patternParts[i].endsWith("}")) {
-                String paramName = patternParts[i].substring(1, patternParts[i].length() - 1);
+                String spec = patternParts[i].substring(1, patternParts[i].length() - 1);
+                int colonIndex = spec.indexOf(':');
+                String paramName = colonIndex >= 0 ? spec.substring(0, colonIndex) : spec;
                 String paramValue = pathParts[i];
                 System.out.println("    -> " + paramName + " = " + paramValue);
                 req.setAttribute(paramName, paramValue);
             }
         }
+    }
+
+    private static String buildRegex(String pattern) {
+        Matcher matcher = PARAM_PATTERN.matcher(pattern);
+        StringBuilder regex = new StringBuilder();
+        int lastEnd = 0;
+
+        while (matcher.find()) {
+            regex.append(pattern, lastEnd, matcher.start());
+
+            String spec = matcher.group(1);
+            String[] parts = spec.split(":", 2);
+            String partRegex = parts.length == 2 ? parts[1] : "[^/]+";
+            regex.append("(").append(partRegex).append(")");
+
+            lastEnd = matcher.end();
+        }
+
+        regex.append(pattern.substring(lastEnd));
+        return regex.toString();
     }
 }
