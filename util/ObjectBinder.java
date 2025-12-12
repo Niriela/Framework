@@ -143,7 +143,9 @@ public class ObjectBinder {
      */
     private static Object getAttributeValue(Object obj, String attributeName) {
         try {
-            String getterName = "get" + capitalize(attributeName);
+            // strip array/index suffix if present: moyenne[0] -> moyenne
+            String baseName = attributeName.split("\\[")[0];
+            String getterName = "get" + capitalize(baseName);
             Method getter = findMethod(obj.getClass(), getterName);
             if (getter != null) {
                 return getter.invoke(obj);
@@ -159,16 +161,111 @@ public class ObjectBinder {
      */
     private static void setAttributeValue(Object obj, String attributeName, Object value) {
         try {
-            String setterName = "set" + capitalize(attributeName);
-            Class<?> targetType = getAttributeType(obj, attributeName);
-
-            if (targetType != null) {
-                // Convertir la valeur si nécessaire
-                Object convertedValue = convertValue(value, targetType);
-
-                Method setter = obj.getClass().getMethod(setterName, targetType);
-                setter.invoke(obj, convertedValue);
+            // gérer notation tableau/index : nomAttribut ou nomAttribut[] ou nomAttribut[2]
+            String baseName = attributeName.split("\\[")[0];
+            Integer index = null;
+            if (attributeName.contains("[")) {
+                String inside = attributeName.substring(attributeName.indexOf('[') + 1, attributeName.indexOf(']'));
+                if (inside != null && !inside.isEmpty()) {
+                    try { index = Integer.parseInt(inside); } catch (NumberFormatException ex) { index = null; }
+                }
             }
+
+            String setterName = "set" + capitalize(baseName);
+            Class<?> targetType = getAttributeType(obj, baseName);
+
+            if (targetType == null) {
+                System.err.println("Setter non trouvé: " + obj.getClass().getName() + "." + baseName);
+                return;
+            }
+
+            // Si on a un index explicit (ex: items[2]) -> manipuler tableau/list
+            if (index != null) {
+                Object current = getAttributeValue(obj, baseName);
+                Class<?> tt = targetType;
+
+                if (tt.isArray()) {
+                    Class<?> comp = tt.getComponentType();
+                    Object arr = current;
+                    int needed = index + 1;
+                    if (arr == null) {
+                        arr = java.lang.reflect.Array.newInstance(comp, needed);
+                    } else if (java.lang.reflect.Array.getLength(arr) <= index) {
+                        Object newArr = java.lang.reflect.Array.newInstance(comp, needed);
+                        System.arraycopy(arr, 0, newArr, 0, java.lang.reflect.Array.getLength(arr));
+                        arr = newArr;
+                    }
+
+                    Object converted = convertValue(value, comp);
+                    java.lang.reflect.Array.set(arr, index, converted);
+
+                    Method setter = obj.getClass().getMethod(setterName, tt);
+                    setter.invoke(obj, arr);
+                    return;
+                } else if (java.util.List.class.isAssignableFrom(tt)) {
+                    java.util.List list = (java.util.List) current;
+                    if (list == null) list = new java.util.ArrayList();
+                    // ensure size
+                    while (list.size() <= index) list.add(null);
+                    Object converted = value;
+                    // try to determine element type from setter parameter if available
+                    Method setter = null;
+                    for (Method m : obj.getClass().getMethods()) {
+                        if (m.getName().equals(setterName) && m.getParameterCount() == 1) {
+                            setter = m; break;
+                        }
+                    }
+                    if (setter != null) {
+                        Class<?> param = setter.getParameterTypes()[0];
+                        if (param.isArray()) {
+                            // not expected for List, ignore
+                        }
+                    }
+
+                    list.set(index, converted);
+                    // call setter
+                    Method setterList = obj.getClass().getMethod(setterName, tt);
+                    setterList.invoke(obj, list);
+                    return;
+                }
+            }
+
+            // Pas d'index explicite -> valeur entière: si setter attend un array ou List, convertir
+            if (targetType.isArray()) {
+                Class<?> comp = targetType.getComponentType();
+                Object arrVal = null;
+                if (value instanceof String[]) {
+                    String[] src = (String[]) value;
+                    arrVal = java.lang.reflect.Array.newInstance(comp, src.length);
+                    for (int i = 0; i < src.length; i++) {
+                        Object cv = convertValue(src[i], comp);
+                        java.lang.reflect.Array.set(arrVal, i, cv);
+                    }
+                } else if (value instanceof String) {
+                    Object cv = convertValue(value, comp);
+                    arrVal = java.lang.reflect.Array.newInstance(comp, 1);
+                    java.lang.reflect.Array.set(arrVal, 0, cv);
+                }
+                Method setter = obj.getClass().getMethod(setterName, targetType);
+                setter.invoke(obj, arrVal);
+                return;
+            } else if (java.util.List.class.isAssignableFrom(targetType)) {
+                java.util.List listVal = new java.util.ArrayList();
+                if (value instanceof String[]) {
+                    for (String s : (String[]) value) listVal.add(s);
+                } else if (value instanceof String) {
+                    listVal.add((String) value);
+                }
+                Method setter = obj.getClass().getMethod(setterName, targetType);
+                setter.invoke(obj, listVal);
+                return;
+            }
+
+            // Convertir la valeur si nécessaire
+            Object convertedValue = convertValue(value, targetType);
+
+            Method setter = obj.getClass().getMethod(setterName, targetType);
+            setter.invoke(obj, convertedValue);
         } catch (NoSuchMethodException e) {
             System.err.println("Setter non trouvé: " + obj.getClass().getName() + "." + attributeName);
         } catch (Exception e) {
@@ -181,7 +278,8 @@ public class ObjectBinder {
      */
     private static Class<?> getAttributeType(Object obj, String attributeName) {
         try {
-            String getterName = "get" + capitalize(attributeName);
+            String baseName = attributeName.split("\\[")[0];
+            String getterName = "get" + capitalize(baseName);
             Method getter = findMethod(obj.getClass(), getterName);
             if (getter != null) {
                 return getter.getReturnType();
