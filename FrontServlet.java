@@ -207,6 +207,40 @@ public class FrontServlet extends HttpServlet {
         
         Class<?> returnType = m.getReturnType();
         
+        // If method annotated with @JSON -> return structured JSON
+        if (m.isAnnotationPresent(framework.annotations.JSON.class)) {
+            res.setContentType("application/json;charset=UTF-8");
+            try (PrintWriter pw = res.getWriter()) {
+                framework.views.JSONResponse jr = new framework.views.JSONResponse();
+
+                if (result instanceof java.util.Map) {
+                    @SuppressWarnings("unchecked")
+                    java.util.Map<String,Object> map = (java.util.Map<String,Object>) result;
+                    jr.setData(map);
+                    jr.setCount(map.size());
+                } else {
+                    // build nested data map from request parameters (dot + bracket notation)
+                    Map<String, Object> nested = new java.util.HashMap<>();
+                    Map<String, String[]> paramMap = req.getParameterMap();
+                    for (String fullKey : paramMap.keySet()) {
+                        String[] vals = paramMap.get(fullKey);
+                        if (vals == null) continue;
+                        Object value = (vals.length == 1) ? vals[0] : vals;
+                        putNested(nested, fullKey, value);
+                    }
+                    jr.setData(nested);
+                    jr.setCount(nested.size());
+                }
+
+                pw.print(jr.toJson());
+                pw.flush();
+            } catch (Exception ex) {
+                res.setStatus(500);
+                res.getWriter().println("{\"status\":\"ERROR\",\"code\":500,\"count\":0,\"data\":{}}");
+            }
+            return;
+        }
+
         if (result instanceof ModelView) {
             handleModelView(req, res, (ModelView) result);
             return;
@@ -227,6 +261,100 @@ public class FrontServlet extends HttpServlet {
                 out.println(result.toString());
             } else {
                 out.println("Retour null");
+            }
+        }
+    }
+
+    // Minimal JSON string escaper
+    private static String escapeJson(String s) {
+        if (s == null) return "";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"': sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\b': sb.append("\\b"); break;
+                case '\f': sb.append("\\f"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                default:
+                    if (c < ' ') {
+                        sb.append(String.format("\\u%04x", (int)c));
+                    } else sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+
+    // Insert value into nested map following dot and bracket notation.
+    @SuppressWarnings("unchecked")
+    private static void putNested(java.util.Map<String, Object> root, String fullKey, Object value) {
+        String[] parts = fullKey.split("\\.");
+        java.util.Map<String, Object> current = root;
+        for (int i = 0; i < parts.length; i++) {
+            String part = parts[i];
+
+            // detect array/index: name[] or name[index]
+            String name = part;
+            Integer idx = null;
+            if (part.endsWith("[]")) {
+                name = part.substring(0, part.length() - 2);
+                idx = -1; // means append or treat as array of values
+            } else if (part.contains("[")) {
+                int b = part.indexOf('[');
+                int e = part.indexOf(']');
+                name = part.substring(0, b);
+                String inside = part.substring(b + 1, e);
+                try { idx = Integer.parseInt(inside); } catch (Exception ex) { idx = null; }
+            }
+
+            boolean last = (i == parts.length - 1);
+
+            if (last) {
+                // set value
+                if (idx == null) {
+                    current.put(name, value);
+                } else if (idx == -1) {
+                    Object existing = current.get(name);
+                    java.util.List<Object> list;
+                    if (existing instanceof java.util.List) list = (java.util.List<Object>) existing;
+                    else if (existing != null && existing.getClass().isArray()) {
+                        list = new java.util.ArrayList<>();
+                        int len = java.lang.reflect.Array.getLength(existing);
+                        for (int k = 0; k < len; k++) list.add(java.lang.reflect.Array.get(existing, k));
+                    } else {
+                        list = new java.util.ArrayList<>();
+                        if (existing != null) list.add(existing);
+                    }
+
+                    if (value instanceof String[]) {
+                        for (String s : (String[]) value) list.add(s);
+                    } else {
+                        list.add(value);
+                    }
+                    current.put(name, list);
+                } else {
+                    Object existing = current.get(name);
+                    java.util.List<Object> list;
+                    if (existing instanceof java.util.List) list = (java.util.List<Object>) existing;
+                    else {
+                        list = new java.util.ArrayList<>();
+                        if (existing != null) list.add(existing);
+                    }
+                    while (list.size() <= idx) list.add(null);
+                    list.set(idx, value);
+                    current.put(name, list);
+                }
+            } else {
+                Object next = current.get(name);
+                if (!(next instanceof java.util.Map)) {
+                    java.util.Map<String, Object> newMap = new java.util.HashMap<>();
+                    current.put(name, newMap);
+                    next = newMap;
+                }
+                current = (java.util.Map<String, Object>) next;
             }
         }
     }
