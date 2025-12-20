@@ -2,22 +2,36 @@ package framework;
 
 import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.annotation.MultipartConfig;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.Part;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Type;
+import java.lang.reflect.ParameterizedType;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import framework.util.*;
 import framework.views.ModelView;
 import framework.annotations.*;
+
+
+@MultipartConfig(
+    maxFileSize = 10485760,      // 10MB
+    maxRequestSize = 20971520,    // 20MB
+    fileSizeThreshold = 1048576   // 1MB
+)
 
 public class FrontServlet extends HttpServlet {
     private UrlScanner.ScanResult scanResult = new UrlScanner.ScanResult();
@@ -112,12 +126,11 @@ public class FrontServlet extends HttpServlet {
     //  MÉTHODE : Trouver ActionMapping
     private ActionMapping findActionMapping(String path, String httpMethod, HttpServletRequest req) {
         System.out.println("=== RECHERCHE ACTION MAPPING ===");
+        System.out.println("Path cherché: " + path + " | HTTP Method: " + httpMethod);
 
-        String normalizedPath = path.toLowerCase();
-        
-        // 1) Correspondance exacte
-        if (actionMappings.containsKey(normalizedPath)) {
-            List<ActionMapping> list = actionMappings.get(normalizedPath);
+        // 1) Correspondance exacte (sans normalisation)
+        if (actionMappings.containsKey(path)) {
+            List<ActionMapping> list = actionMappings.get(path);
             for (ActionMapping am : list) {
                 if ("ALL".equals(am.getHttpMethod()) || httpMethod.equals(am.getHttpMethod())) {
                     System.out.println("  ✓✓ TROUVÉ ActionMapping exact : " + path);
@@ -130,7 +143,7 @@ public class FrontServlet extends HttpServlet {
         for (String pattern : actionMappings.keySet()) {
             if (pattern.contains("{")) {
                 String regex = pattern.replaceAll("\\{[^/]+\\}", "([^/]+)");
-                if (normalizedPath.matches(regex.toLowerCase())) {
+                if (path.matches(regex)) {
                     extractPathParams(pattern, path, req);
                     List<ActionMapping> list = actionMappings.get(pattern);
                     for (ActionMapping am : list) {
@@ -143,7 +156,7 @@ public class FrontServlet extends HttpServlet {
             }
         }
         
-        System.out.println(" Aucun ActionMapping trouvé");
+        System.out.println("  Aucun ActionMapping trouvé");
         return null;
     }
 
@@ -393,13 +406,60 @@ public class FrontServlet extends HttpServlet {
         java.lang.reflect.Parameter[] params = m.getParameters();
         Object[] args = new Object[paramTypes.length];
 
+        // Préparer les Maps pour fichiers
+        Map<String, byte[]> fileParams = new HashMap<>();
+        Set<String> fileParamNames = new HashSet<>(); // Pour tracker les noms de fichiers
+        boolean isMultipart = req.getContentType() != null && 
+                             req.getContentType().startsWith("multipart/form-data");
+        
+        if (isMultipart) {
+            try {
+                for (Part part : req.getParts()) {
+                    if (part.getSubmittedFileName() != null && !part.getSubmittedFileName().isEmpty()) {
+                        InputStream inputStream = part.getInputStream();
+                        byte[] fileBytes = inputStream.readAllBytes();
+                        // Utiliser le vrai nom du fichier avec extension
+                        fileParams.put(part.getSubmittedFileName(), fileBytes);
+                        fileParamNames.add(part.getName()); // Le nom du champ pour tracker
+                        inputStream.close();
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("Erreur lecture fichiers: " + e.getMessage());
+            }
+        }
+
         for (int i = 0; i < paramTypes.length; i++) {
             Param paramAnnotation = params[i].getAnnotation(Param.class);
             String paramName = (paramAnnotation != null) ? paramAnnotation.value() : params[i].getName();
 
-            // Vérifier si le paramètre est une Map<String, Object>
+            // Vérifier si le paramètre est une Map
             if (paramTypes[i].equals(java.util.Map.class)) {
-                args[i] = convertParametersToMap(req);
+                // Vérifier le type générique
+                Type genericType = params[i].getParameterizedType();
+                if (genericType instanceof ParameterizedType) {
+                    ParameterizedType paramType = (ParameterizedType) genericType;
+                    Type[] typeArgs = paramType.getActualTypeArguments();
+                    
+                    if (typeArgs.length == 2 && typeArgs[0].equals(String.class)) {
+                        if (typeArgs[1].equals(Object.class)) {
+                            // Map<String, Object> pour paramètres normaux (exclure les fichiers)
+                            args[i] = convertParametersToMap(req, fileParamNames);
+                        } else if (isByteArrayType(typeArgs[1])) {
+                            // Map<String, byte[]> pour fichiers
+                            if (!isMultipart) {
+                                System.err.println("ATTENTION: Méthode attend des fichiers mais formulaire pas en multipart!");
+                            }
+                            args[i] = fileParams;
+                        } else {
+                            args[i] = convertParametersToMap(req, fileParamNames);
+                        }
+                    } else {
+                        args[i] = convertParametersToMap(req, fileParamNames);
+                    }
+                } else {
+                    args[i] = convertParametersToMap(req, fileParamNames);
+                }
             } else {
                 // Utiliser ObjectBinder pour les objets complexes avec notation pointée
                 Object bindedValue = ObjectBinder.bindParameters(
@@ -430,11 +490,16 @@ public class FrontServlet extends HttpServlet {
     }
 
     // Nouvelle méthode pour convertir les paramètres en Map<String, Object>
-    private Map<String, Object> convertParametersToMap(HttpServletRequest req) {
+    private Map<String, Object> convertParametersToMap(HttpServletRequest req, Set<String> fileParamNames) {
         Map<String, Object> resultMap = new HashMap<>();
         Map<String, String[]> parameterMap = req.getParameterMap();
         
         for (String key : parameterMap.keySet()) {
+            // Exclure les paramètres qui sont des fichiers
+            if (fileParamNames != null && fileParamNames.contains(key)) {
+                continue;
+            }
+            
             String[] values = parameterMap.get(key);
             // Si un seul paramètre, ajouter la valeur directement
             // Sinon, ajouter le tableau
@@ -449,6 +514,15 @@ public class FrontServlet extends HttpServlet {
         resultMap.forEach((key, value) -> System.out.println(key + " -> " + value));
         
         return resultMap;
+    }
+
+    // Vérifie si le type correspond à byte[] pour la détection des maps de fichiers
+    private boolean isByteArrayType(Type type) {
+        if (type instanceof Class<?>) {
+            return ((Class<?>) type).equals(byte[].class);
+        }
+        String typeName = type.getTypeName();
+        return "byte[]".equals(typeName) || "[B".equals(typeName);
     }
 
     private Object invokeMethod(Method method, HttpServletRequest req, Object controllerInstance) throws Exception {
