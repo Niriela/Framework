@@ -418,8 +418,9 @@ public class FrontServlet extends HttpServlet {
                     if (part.getSubmittedFileName() != null && !part.getSubmittedFileName().isEmpty()) {
                         InputStream inputStream = part.getInputStream();
                         byte[] fileBytes = inputStream.readAllBytes();
-                        fileParams.put(part.getName(), fileBytes);
-                        fileParamNames.add(part.getName()); // Ajouter le nom à l'ensemble
+                        // Utiliser le vrai nom du fichier avec extension
+                        fileParams.put(part.getSubmittedFileName(), fileBytes);
+                        fileParamNames.add(part.getName()); // Le nom du champ pour tracker
                         inputStream.close();
                     }
                 }
