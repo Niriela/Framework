@@ -430,13 +430,33 @@ public class FrontServlet extends HttpServlet {
         }
 
         for (int i = 0; i < paramTypes.length; i++) {
-            Param paramAnnotation = params[i].getAnnotation(Param.class);
-            String paramName = (paramAnnotation != null) ? paramAnnotation.value() : params[i].getName();
+            java.lang.reflect.Parameter p = params[i];
+            Class<?> type = paramTypes[i];
+            
+            // Vérifier si le paramètre est annoté @Session
+            if (p.isAnnotationPresent(Session.class)) {
+                if (Map.class.isAssignableFrom(type)) {
+                    Type genericType = p.getParameterizedType();
+                    if (genericType instanceof ParameterizedType) {
+                        ParameterizedType pt = (ParameterizedType) genericType;
+                        Type[] types = pt.getActualTypeArguments();
+                        if (types.length == 2 && types[0] == String.class && types[1] == Object.class) {
+                            args[i] = new SessionMap(req.getSession());
+                            continue;
+                        }
+                    }
+                }
+                // Si ce n'est pas Map<String, Object>, on peut lever une erreur ou ignorer
+                throw new RuntimeException("@Session doit être utilisé sur un paramètre de type Map<String, Object>");
+            }
+            
+            Param paramAnnotation = p.getAnnotation(Param.class);
+            String paramName = (paramAnnotation != null) ? paramAnnotation.value() : p.getName();
 
             // Vérifier si le paramètre est une Map
-            if (paramTypes[i].equals(java.util.Map.class)) {
+            if (type.equals(java.util.Map.class)) {
                 // Vérifier le type générique
-                Type genericType = params[i].getParameterizedType();
+                Type genericType = p.getParameterizedType();
                 if (genericType instanceof ParameterizedType) {
                     ParameterizedType paramType = (ParameterizedType) genericType;
                     Type[] typeArgs = paramType.getActualTypeArguments();
@@ -463,8 +483,8 @@ public class FrontServlet extends HttpServlet {
             } else {
                 // Utiliser ObjectBinder pour les objets complexes avec notation pointée
                 Object bindedValue = ObjectBinder.bindParameters(
-                    new Class<?>[] { paramTypes[i] },
-                    new java.lang.reflect.Parameter[] { params[i] },
+                    new Class<?>[] { type },
+                    new java.lang.reflect.Parameter[] { p },
                     req.getParameterMap()
                 )[0];
                 
@@ -477,7 +497,7 @@ public class FrontServlet extends HttpServlet {
                     }
 
                     if (paramValue != null && !paramValue.isEmpty()) {
-                        args[i] = ParamConverter.convert(paramValue, paramTypes[i]);
+                        args[i] = ParamConverter.convert(paramValue, type);
                     } else {
                         args[i] = null;
                     }
