@@ -163,6 +163,20 @@ public class FrontServlet extends HttpServlet {
     //  MÉTHODE : Gérer ActionMapping
     private void handleActionMapping(HttpServletRequest req, HttpServletResponse res, ActionMapping am) throws IOException {
         try {
+            // Vérification d'autorisation
+            if (!AuthManager.isAuthorized(am.getTheMethod(), req)) {
+                boolean isJson = am.getTheMethod().isAnnotationPresent(framework.annotations.JSON.class);
+                PrintWriter out = res.getWriter();
+                
+                if (isJson) {
+                    sendJsonEnvelope(res, out, Map.of("message", "Unauthorized"), false, "401");
+                } else {
+                    res.setContentType("text/plain;charset=UTF-8");
+                    out.println("Unauthorized");
+                }
+                return;
+            }
+
             Class<?> controllerClass = Class.forName(am.getTheClassName());
             Object controller = controllerClass.getDeclaredConstructor().newInstance();
             Object result = invokeMethod(am.getTheMethod(), req, controller);
@@ -199,6 +213,20 @@ public class FrontServlet extends HttpServlet {
 
     private boolean handleMappedMethod(HttpServletRequest req, HttpServletResponse res, Method m) throws IOException {
         Class<?> cls = m.getDeclaringClass();
+
+        // Vérification d'autorisation
+        if (!AuthManager.isAuthorized(m, req)) {
+            boolean isJson = m.isAnnotationPresent(framework.annotations.JSON.class);
+            PrintWriter out = res.getWriter();
+            
+            if (isJson) {
+                sendJsonEnvelope(res, out, Map.of("message", "Unauthorized"), false, "401");
+            } else {
+                res.setContentType("text/plain;charset=UTF-8");
+                out.println("Unauthorized");
+            }
+            return false;
+        }
 
         try {
             Object result = invokeMethod(m, req, cls.getDeclaredConstructor().newInstance());
@@ -276,6 +304,20 @@ public class FrontServlet extends HttpServlet {
                 out.println("Retour null");
             }
         }
+    }
+
+    // Envoyer une réponse JSON structurée
+    private void sendJsonEnvelope(HttpServletResponse res, PrintWriter out, Map<String, Object> data, 
+                                   boolean success, String statusCode) {
+        res.setContentType("application/json;charset=UTF-8");
+        res.setStatus(Integer.parseInt(statusCode));
+        
+        framework.views.JSONResponse jr = new framework.views.JSONResponse();
+        jr.setData(data);
+        jr.setCount(data.size());
+        
+        out.print(jr.toJson());
+        out.flush();
     }
 
     // Minimal JSON string escaper
